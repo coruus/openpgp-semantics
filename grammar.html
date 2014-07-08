@@ -1,0 +1,778 @@
+<h1 id="openpgp-syntax-and-semantic-validity">OpenPGP syntax and semantic validity</h1>
+<h2 id="incomplete-draft">(incomplete draft)</h2>
+<h1 id="introduction">Introduction</h1>
+<p>A note: All references are to RFC 4880, unless otherwise specified.</p>
+<h1 id="common-definitions">Common definitions</h1>
+<p>TODO cleanup and make bindings consistent</p>
+<h2 id="notes-on-types">Notes on types</h2>
+<pre><code>_||_ : (Bool, Bool) -&gt; Bool
+_|_  : ({Type}A, {Type}B) -&gt; (A + B)
+# (Note that the | operator represents ordered choice.)
+map : (T -&gt; T) -&gt; (Sequence[T] -&gt; Sequence[T])
+take : (Sequence, Nat, Nat) -&gt; (Sequence)</code></pre>
+<h2 id="basic-datatypes">Basic datatypes</h2>
+<p>Unsigned big-endian integers (ubints):</p>
+<pre><code>byte       ::= 0..255
+           &gt;&gt;= \x = Nat(x0)
+two_octet  ::= byte byte
+           &gt;&gt;= \x = x0&lt;&lt;8 + x1
+four_octet ::= two_octet two_octet
+           &gt;&gt;= \x = x0&lt;&lt;16 + x1</code></pre>
+<p>Old-style lengths are just ubints; their length is implicitly selected by other syntactic elements.</p>
+<pre><code>len_old1 ::= byte
+         &gt;&gt;= \length = x0
+len_old2 ::= two_octet
+         &gt;&gt;= \length = x0
+len_old4 ::= four_octet
+         &gt;&gt;= \length = x0</code></pre>
+<p>New-style lengths (4.2.2) implicitly encode their own length:</p>
+<pre><code>len_new1 ::= 0..192                                       # 4.2.2.1
+         &gt;&gt;= \length = Nat(x0)
+len_new2 ::= 192..223 0..255                              # 4.2.2.2
+         &gt;&gt;= \length = Nat((x0 - 192)&lt;&lt;8 + x1 + 192)
+len_new4 ::= 255 byte byte byte byte                      # 4.2.2.3
+         &gt;&gt;= \length = Nat(x1&lt;&lt;24 + x2&lt;&lt;16 + x3&lt;&lt;8 + x4)
+len_new  ::= (len_new1 | len_new2 | len_new4 | len_new_partial)</code></pre>
+<p>New-style lengths with their first byte in 192..223 encode a <em>partial</em> body length (4.2.2.4),</p>
+<pre><code>let partial_length x = Nat(1 &lt;&lt; (x&amp;0x1f))</code></pre>
+<p>which, by definition, is in {2^n : n /in 0..30. Other semantic conditions apply:</p>
+<pre><code> packet_body &lt;&lt;= nil
+ len_new_partial ::= 224..254 bytes[length] len_new
+                 &gt;&gt;= \length = partial_length(x0)
+     packet_body &lt;&lt;= packet_body ++ x1</code></pre>
+<h2 id="other-common-types">Other common types</h2>
+<p>Some other commonly used types:</p>
+<pre><code>sha1_hash   ::= byte[20]
+fingerprint ::= sha1_hash
+timestamp   ::= four_octet
+timestamporinf ::= timestamp
+               &gt;&gt;= \x = IF x0 == 0 THEN Inf ELSE x0</code></pre>
+<h1 id="elliptic-curve-cryptography-definitions">Elliptic curve cryptography definitions</h1>
+<h3 id="curve-oids">Curve OIDs</h3>
+<p>RFC 6637 s. 11:</p>
+<pre><code>curve_oid_p256 ::= 0x08 0x2a 0x86 0x48 0xce 0x3d 0x03 0x01 0x07
+curve_oid_p384 ::= 0x05 0x2b 0x81 0x04 0x00 0x22
+curve_oid_p521 ::= 0x05 0x2b 0x81 0x04 0x00 0x23
+
+ec_curve_oid   ::= curve_oid_p256 | curve_oid_p384 | curve_oid_p521</code></pre>
+<h3 id="algorithm-limitations">Algorithm limitations</h3>
+<p>RFC 6637 s. 11-13: SHA2 is the only permitted hash algorithm for the ECDH KDF, and for ECDSA hashes-to-sign:</p>
+<pre><code>ec_hash_algo  ::= hash_algo_sha2</code></pre>
+<p>For ECDH:</p>
+<pre><code>ecdh_kek_algo   ::= symm_algo_aes
+ecdh_kdf_params ::= ecdh_kdf_algo:ec_hash_algo ecdh_kek_algo</code></pre>
+<h1 id="packet-tags">Packet tags</h1>
+<p>RFC 4880 s. 4.2.0.</p>
+<h2 id="ptag-bit-level-diagram">PTag bit-level diagram</h2>
+<pre><code>      ================= old-format
+      1 0=========================
+      | | ------------- packet tag
+      | | | | | | ----- length type
+      | | | | | | | |
+     +---------------+
+PTag |7 6 5 4 3 2 1 0|
+     +---------------+
+      | | | | | | | |
+      | | ------------- packet tag
+      1 1 =======================
+      ================= new-format</code></pre>
+<h2 id="special-packet-tag-types">Special packet tag types</h2>
+<p>We define two types to represent packets whose contents are opaque:</p>
+<pre><code># An opaque, possibly valid private packet body
+private_body ::= bytes[length]
+
+# An opaque, invalid packet body
+invalid_packet_body ::= bytes[length]</code></pre>
+<p>The invalid packet body type is used to recover parsing from an invalid packet; this is needed to replicate the behavior of typical OpenPGP implementations.</p>
+<h2 id="old--or-new-format-tag-types-type-16">Old- or new-format tag types (type &lt; 16)</h2>
+<p>All 4-bit tag types, old- or new-format PTags:</p>
+<pre><code>private0 ::=\
+  (  0x00 len_old1 | 0x01 len_old2 | 0x02 len_old4 | 0xc0 len_new)
+  (private_body | invalid_tag_body)
+pkesk ::=\
+  (  0x04 len_old1 | 0x05 len_old2 | 0x06 len_old4 | 0xc1 len_new)
+  (pkesk_body | invalid_tag_body)
+sig ::=\
+  (  0x08 len_old1 | 0x09 len_old2 | 0x0a len_old4 | 0xc2 len_new)
+  (sig_body | invalid_tag_body)
+skesk ::=\
+  (  0x0c len_old1 | 0x0d len_old2 | 0x0e len_old4 | 0xc3 len_new)
+  (skesk_body | invalid_tag_body)
+onepass_sig ::=\
+  (  0x10 len_old1 | 0x11 len_old2 | 0x12 len_old4 | 0xc4 len_new)
+  (onepass_sig_body | invalid_tag_body)
+secretkey ::=\
+  (  0x14 len_old1 | 0x15 len_old2 | 0x16 len_old4 | 0xc5 len_new)
+  (secretkey_body | invalid_tag_body)
+publickey ::=\
+  (  0x18 len_old1 | 0x19 len_old2 | 0x1a len_old4 | 0xc6 len_new)
+  (publickey_body | invalid_tag_body)
+secretsubkey ::=\
+  (  0x1c len_old1 | 0x1d len_old2 | 0x1e len_old4 | 0xc7 len_new)
+  (secretsubkey_body | invalid_tag_body)
+compressed ::=\
+  (  0x20 len_old1 | 0x21 len_old2 | 0x22 len_old4 | 0xc8 len_new)
+  (compressed_body | invalid_tag_body)
+sedp ::=\
+  (  0x24 len_old1 | 0x25 len_old2 | 0x26 len_old4 | 0xc9 len_new)
+  (sedp_body | invalid_tag_body)
+marker ::=\
+  (  0x28 len_old1 | 0x29 len_old2 | 0x2a len_old4 | 0xca len_new)
+  (marker_body | invalid_tag_body)
+literal ::=\
+  (  0x2c len_old1 | 0x2d len_old2 | 0x2e len_old4 | 0xcb len_new)
+  (literal_body | invalid_tag_body)
+trust ::=\
+  (  0x30 len_old1 | 0x31 len_old2 | 0x32 len_old4 | 0xcc len_new)
+  (trust_body | invalid_tag_body)
+userid ::=\
+  (  0x34 len_old1 | 0x35 len_old2 | 0x36 len_old4 | 0xcd len_new)
+  (userid_body | invalid_tag_body)
+publicsubkey ::=\
+  (  0x38 len_old1 | 0x39 len_old2 | 0x3a len_old4 | 0xce len_new)
+  (publicsubkey_body | invalid_tag_body)
+private15 ::=\
+  (  0x3c len_old1 | 0x3d len_old2 | 0x3e len_old4 | 0xcf len_new)
+  (private_body | invalid_tag_body)</code></pre>
+<h2 id="new-format-tag-types-type-15">New-format tag types (type &gt; 15)</h2>
+<p>All 6-bit tag types &gt; 15, new-format PTags only:</p>
+<pre><code>private16 ::=\
+  0xd0 len_new (private_body | invalid_tag_body)
+userattrib ::=\
+  0xd1 len_new (userattrib_body | invalid_tag_body)
+seipd ::=\
+  0xd2 len_new (seipd_body | invalid_tag_body)
+mdc ::=\
+  0xd3 len_new (mdc_body | invalid_tag_body)
+private20 ::=\
+  0xd4 len_new (private_body | invalid_tag_body)
+private21 ::=\
+  0xd5 len_new (private_body | invalid_tag_body)
+private22 ::=\
+  0xd6 len_new (private_body | invalid_tag_body)
+private23 ::=\
+  0xd7 len_new (private_body | invalid_tag_body)</code></pre>
+<h1 id="algorithms">Algorithms</h1>
+<h2 id="public-key-algorithms">Public-key algorithms</h2>
+<p>RFC 4880 s. 9.1.</p>
+<h3 id="prime-based-crypto">Prime-based crypto</h3>
+<h4 id="rsa">RSA</h4>
+<pre><code># RSA
+RSA_ES             ::= 1
+algo_rsa_enc       ::= RSA_E=2 | RSA_ES
+algo_rsa_sig       ::= RSA_S=3 | RSA_ES
+
+# RSA predicates
+let \is_rsae x       = (x == 2 || x == 1)
+let \is_rsas x       = (x == 3 || x == 1)
+let \is_rsa  x       = (x \in {1,2,3})</code></pre>
+<h4 id="other-prime-based-crypto">Other prime-based crypto</h4>
+<p>TODO(dlg): PS use of X9.42 DH?</p>
+<pre><code>algo_elg_es        ::= ELG_ES=20
+algo_elg_enc       ::= ELG_E=16
+algo_dhx942_enc    ::= DH_X942=21
+
+# Prime-based encryption
+algo_prime_enc     ::= algo_elg_enc | algo_rsa_enc | algo_dhx942_enc
+
+# Prime-based signatures
+algo_prime_sig     ::= algo_rsa_sig | algo_dsa | algo_elg_es</code></pre>
+<h4 id="prime-based-crypto-status-predicate">Prime-based crypto status predicate</h4>
+<p>The status of prime-based-crypto algorithms, according to RFC4880:</p>
+<pre><code>let \algo_status x = CASE DH_X942 THEN &quot;reserved&quot;
+                     CASE ELG_ES  THEN &quot;formerly&quot;
+                     CASE RSA_ES  THEN &quot;deprecated&quot;</code></pre>
+<h3 id="elliptic-curve-crypto">Elliptic-curve crypto</h3>
+<p>The EC algorithms defined by RFC 6637 s. 5:</p>
+<pre><code>algo_ecdh          ::= ECDH=18
+algo_ecdsa         ::= ECDSA=19</code></pre>
+<h3 id="unspecified-crypto-algorithms">Unspecified crypto algorithms</h3>
+<pre><code>PK_EXPERIMENTAL = 100..110
+PK_UNKNOWN      = 4..15 | 22..99 | 111..255
+
+let \algo_pk_shouldnt_process x = (   x \in PK_EXPERIMENTAL
+                                   || x \in PK_UNKNOWN
+                                   || x == ELG_ES)</code></pre>
+<h2 id="symmetric-key-algorithms">Symmetric-key algorithms</h2>
+<p>The symmetric-key encryption algorithms defined in RFC 4880 s. 9.1, extended by RFC 5581.</p>
+<pre><code>algo_symm           ::= algo_symm_modern | algo_symm_old | algo_symm_other</code></pre>
+<p>The &quot;plaintext&quot; algorithm, also known as (13)^2:</p>
+<pre><code>algo_symm_plaintext ::= PLAINTEXT=0</code></pre>
+<p>AES has to be broken out from other algorithms to support RFC 6637's constraints on KEK algorithm:</p>
+<pre><code># Algorithms with &lt; 128-bit security strength
+algo_symm_old       ::= IDEA=1 | TDES=2 | CAST5=3 | BLOWFISH=4
+# Advanced Encryption Standard
+algo_symm_aes       ::= AES128=7 | AES192=8 | AES256=9</code></pre>
+<p>RFC 5581's extension to add Camellia:</p>
+<pre><code>algo_symm_camellia  ::= CAMELLIA128=11 | CAMELLIA192=12 | CAMELLIA256=13</code></pre>
+<p>We also define a set of modern(-ish) crypto algorithms:</p>
+<pre><code># Algorithms with &gt;= 128-bit security strength, no weak keys
+algo_symm_modern    ::= (  algo_symm_aes
+                         | TWOFISH=10
+                         | algo_symm_camellia )</code></pre>
+<h3 id="unspecified-symmetric-crypto-algorithms">Unspecified symmetric crypto algorithms</h3>
+<p>We differentiate reserved, private, and undefined crypto algorithm numbers:</p>
+<pre><code>SYMM_RESERVED       ::= 5..6
+SYMM_PRIVATE        ::= 100..109
+SYMM_UNDEFINED      ::= 14..99 | 111..255
+algo_symm_other     ::= SYMM_RESERVED | SYMM_PRIVATE | SYMM_UNDEFINED</code></pre>
+<h2 id="hash-algorithms">Hash algorithms</h2>
+<pre><code>algo_hash          ::=  algo_hash_old
+                      | algo_hash_sha1
+                      | algo_hash_sha2
+                      | algo_hash_other</code></pre>
+<h3 id="hash-algorithms-oldest">Hash algorithms, oldest</h3>
+<pre><code>algo_hash_old      ::= MD5=1 | RIPEMD160=3
+algo_hash_sha1     ::= SHA1=2</code></pre>
+<h3 id="hash-algorithms-sha-2">Hash algorithms, SHA-2</h3>
+<p>SHA2-512/384 is broken out separately; its use is required for the RFC 6637 s. 12.2.1 profile.</p>
+<pre><code>algo_hash_sha2_512 ::= SHA2_384=9 | SHA2_512=10
+algo_hash_sha2     ::= SHA2_224=11 | SHA2_256=8 | algo_hash_sha2_512</code></pre>
+<h3 id="unspecified-hash-algorithms">Unspecified hash algorithms</h3>
+<pre><code>HASH_RESERVED      ::= 4..7
+HASH_PRIVATE       ::= 100..110
+HASH_UNDEFINED     ::= 111..255
+algo_hash_other    ::= HASH_RESERVED | HASH_PRIVATE | HASH_UNDEFINED</code></pre>
+<h2 id="string-to-key-s2k-specifiers">String-to-key (S2K) specifiers</h2>
+<p>String-to-key (S2K) specifiers are used to combine a &quot;password&quot; and, optionally, salt into a symmetric encryption key. The specifier format is defined by RFC 4880 s. 3.7.1.</p>
+<h3 id="common-definitions-1">Common definitions</h3>
+<p>If salt is used, it is always 8 bytes long:</p>
+<p>s2k_salt ::= bytes[8]</p>
+<h3 id="s2k-specifier-types">S2K specifier types</h3>
+<p>S2K <em>specifiers</em> should not be confused with S2K <em>conventions</em>; an S2K convention contains an S2K specifier.</p>
+<h4 id="undefined-s2k-specifiers">Undefined S2K specifiers</h4>
+<p>Because the length of an S2K specifier is determined by its definition, undefined S2K specifiers result in the remainder of the packet becoming unparseable.</p>
+<pre><code>s2k_error         ::= (2 | 4..255) error</code></pre>
+<h4 id="simple-s2k">Simple S2K</h4>
+<p>Simple S2K specifiers (3.7.1.1):</p>
+<pre><code>s2k_simple        ::= S2K_SIMPLE=0x00   hash_algo</code></pre>
+<h4 id="salted-s2k">Salted S2K</h4>
+<p>Salted S2Ks specifiers (3.7.1.2):</p>
+<pre><code>s2k_salted        ::= S2K_SALTED=0x01   hash_algo s2k_salt</code></pre>
+<h4 id="iterated-and-salted-s2k">Iterated and salted S2K</h4>
+<p>Iterated and salted S2K specifiers are defined by RFC 4480 s. 3.7.1.3.</p>
+<p>A helper function to decode the encoded bytecount of hashed material,</p>
+<pre><code>\decode_s2k_c : Nat -&gt; (Nat -&gt; Nat)
+let \decode_s2k_c c =
+  let \bytecount passlen =
+    max(passlen + saltlen=8,
+        (16 + (c&amp;15)) &lt;&lt; ((c&gt;&gt;4) + 6))</code></pre>
+<p>and the specifier definition:</p>
+<pre><code>s2k_iterated      ::= S2K_ITERATED=0x03
+                      hash_algo
+                      s2k_salt
+                      s2k_encoded_count</code></pre>
+<h3 id="ec-private-key-s2k-specifiers">EC private key S2K specifiers</h3>
+<p>RFC 6637 requires that, when used for protecting a private EC key, only the I&amp;S S2K specifiers are used:</p>
+<pre><code># RFC 6637 s. 13
+s2k_ec           ::= s2k_iterated</code></pre>
+<p>Since SHA1 only provides 180-bits of output, it is impossible to achieve the 192-bit security strength required by RFC 6637 s. 12.2.1 using it:</p>
+<pre><code># RFC 6637 s. 12.2.1
+s2k_ec_192b       ::= S2K_ITERATED=0x03
+                      hash_algo_sha2_512
+                      s2k_salt
+                      s2k_encoded_count</code></pre>
+<p>RFC 6637 apparently does not forbid the use of SHA1 as the S2K hash function; but it dosn't state that it may be used, either. QQQQ: sha2 acceptable?</p>
+<h3 id="s2k-specifiers-generally">S2K specifiers, generally</h3>
+<pre><code>s2k_rfc4880       ::= s2k_simple | s2k_salted | s2k_iterated | s2k_error</code></pre>
+<h1 id="packet-bodies">Packet bodies</h1>
+<h2 id="tag-1-public-key-encrypted-session-key">Tag 1: Public-key encrypted session key</h2>
+<p>RFC 4880 s. 5.1:</p>
+<h3 id="prime-based-crypto-1">Prime based crypto</h3>
+<pre><code># RSA-E/RSA-ES
+pkesk_rsa_asf         ::= algo_rsa_enc rsa_memodn:mpi
+# ELG-E
+pkesk_elge_asf        ::= algo_elg_enc elge_gkmodp:mpi elge_mykmodp:mpi
+# X942DH
+# TODO</code></pre>
+<h3 id="elliptic-curve-crypto-1">Elliptic curve crypto</h3>
+<p>RFC 6637 s. 8:</p>
+<pre><code>pkesk_ecdh_wrappedkey ::= wrappedkeylen:32..254 bytes[wrappedkeylen]
+pkesk_ecdh_asf        ::= ec_ephem_pubkey:mpi pkesk_ecdh_wrappedkey</code></pre>
+<h3 id="public-key-encrypted-session-key">Public-key encrypted session key</h3>
+<pre><code>pkesk_v               ::= 3
+pkesk_asf             ::= (pkesk_elge_asf | pkesk_rsa_asf | pkesk_ecdh_asf)
+pkesk_body            ::= pkesk_v keyid pkesk_asf</code></pre>
+<h2 id="tag-2-signature-tag-2">Tag 2: Signature (tag 2)</h2>
+<p>RFC 4880 s. 5.2.1</p>
+<h3 id="common-definitions-2">Common definitions</h3>
+<p>Some definitions common to all signature formats:</p>
+<pre><code>sig_creation_time  ::= timestamp
+sig_signer_keyid   ::= keyid</code></pre>
+<p>The left 16-bits of the signed hash:</p>
+<pre><code>sig_left2          ::= byte byte</code></pre>
+<h3 id="signature-types">Signature types</h3>
+<p>RFC 4880 defines a limited number of signature types:</p>
+<pre><code>SIG_V3 ::= (  SIG_BINARY         = 0x00
+            | SIG_TEXT           = 0x01
+            | SIG_GENERIC        = 0x10
+            | SIG_PERSONA        = 0x11
+            | SIG_CASUAL         = 0x12
+            | SIG_POSITIVE       = 0x13
+            | SIG_SUBKEYBIND     = 0x18
+            | SIG_PRIMARYKEYBIND = 0x19
+            | SIG_KEY            = 0x1f
+            | SIG_REVOKE         = 0x20
+            | SIG_SUBKEYREVOKE   = 0x28
+            | SIG_CERTREVOKE     = 0x30
+            | SIG_TIMESTAMP      = 0x40
+            | SIG_THIRDPARTY     = 0x50 )
+SIG_V4 ::= SIG_V3 | SIG_STANDALONE=0x02
+
+sig_err_v3         ::= {SIG_V4}/{SIG_V3} error
+sig_type_v3        ::= SIG_V3 | sig_type_unknown | sig_type_err_v3
+sig_type_v4        ::= SIG_V4 | sig_type_unknown
+sig_type_unknown   ::= (0x03..0x09 | 0x14..0x17 | 0x1a..0x1e | 0x21..0x27
+                        | 0x29 | 0x31..0x39 | 0x41..0x49 | 0x51..0xff)</code></pre>
+<p>QQQQ: Should an unknown signature type produce an error here?</p>
+<h3 id="algorithm-specific-fields">Algorithm specific fields</h3>
+<h4 id="prime-based-crypto-algorithm-specific-fields">Prime-based crypto algorithm-specific fields</h4>
+<p>RFC 4880 s. 5.2.2:</p>
+<pre><code># RSA-S/RSA-ES
+sig_asf_rsa        ::= &amp;(is_rsas pubkey_algo_rsa)
+                       rsa_mdmodn:mpi
+# DSA
+sig_asf_dsa        ::= &amp;pubkey_algo==DSA
+                       dsa_r:mpi
+                       dsa_s:mpi
+# ELG-ES
+# only version 2</code></pre>
+<h4 id="elliptic-curve-crypto-algorithm-specific-fields">Elliptic-curve crypto algorithm-specific fields</h4>
+<p>RFC 6637 s. 10 (incorporating RFC 4880 s. 5.2.2 by reference):</p>
+<pre><code># ECDSA
+sig_asf_ecdsa      ::= &amp;pubkey_algo==ECDSA ecdsa_r:mpi ecdsa_s:mpi</code></pre>
+<h3 id="version-4-signature-subpackets">Version 4 signature subpackets</h3>
+<p>Version 4 signatures can contain both signed and unsigned subpackets:</p>
+<pre><code># RFC 4880 s. 5.2.3
+hashed_subpackets   ::= hashed_subpacketlen:len_old2
+                        bytes[hashed_subpacketlen]
+unhashed_subpackets ::= unhashed_subpacketlen:len_old2
+                        bytes[unhashed_subpacketlen]</code></pre>
+<h4 id="subpacket-format">Subpacket format</h4>
+<p>RFC 4880 s. 5.2.3.1</p>
+<pre><code>len_new&#39;  ::= len_new -- len_new_partial
+subpacket ::= subpacket_length:len_new&#39;
+              subpacket_type
+              subpacket_data</code></pre>
+<h4 id="subpacket-types">Subpacket types</h4>
+<p>RFC 4880 s. 5.2.3.1:</p>
+<pre><code>subpacket_type ::=   subpacket_type_placehold
+                   | subpacket_type_reserved
+                   | subpacket_type_specified
+                   | subpacket_type_undefined
+                &gt;&gt;= \critical=(critbit_set x0)</code></pre>
+<p>A subpacket is &quot;critical&quot; if bit 7 is set:</p>
+<pre><code>let \critbit_set x = (64&amp;x) == 64</code></pre>
+<p>Several types of subpacket, each with its own syntax, are defined:</p>
+<pre><code>subpacket_type_placehold ::= 10|74
+subpacket_type_reserved  ::= 0..1|64..65|8|72|13..15|74..79|17..19|81..83
+subpacket_type_private   ::= 100..110|164..174
+subpacket_type_defined   ::=   SP_SIG_CREATION_TIME        = ( 2|66)
+                             | SP_SIG_EXPIRATION_TIME      = ( 3|67)
+                             | SP_EXPORTABLE_CERTIFICATION = ( 4|68)
+                             | SP_TRUST_SIGNATURE          = ( 5|69)
+                             | SP_REGULAR_EXPRESSION       = ( 6|70)
+                             | SP_REVOCABLE                = ( 7|71)
+                             | SP_KEY_EXPIRATION_TIME      = ( 9|73)
+                             | SP_PREF_SYMM_ALGO           = (11|75)
+                             | SP_PREF_REVOCATION_KEY      = (12|76)
+                             | SP_PREF_ISSURE              = (16|80)
+                             | SP_PREF_NOTATION_DATA       = (20|84)
+                             | SP_PREF_HASH_ALGO           = (21|85)
+                             | SP_PREF_COMP_ALGO           = (22|86)
+                             | SP_PREF_KEY_SERVER          = (24|88)
+                             | SP_PRIMARY_USER_ID          = (25|89)
+                             | SP_POLICY_URI               = (26|90)
+                             | SP_KEY_FLAGS                = (27|91)
+                             | SP_SIGNERS_USER_ID          = (28|92)
+                             | SP_REASON_FOR_REVOCATION    = (29|93)
+                             | SP_FEATURES                 = (30|94)
+                             | SP_SIGNATURE_TARGET         = (31|95)
+                             | SP_EMBEDDED_SIGNATURE       = (32|96)
+subpacket_type_specified  ::=   subpacket_type_placehold
+                              | subpacket_type_reserved
+                              | subpacket_type_private
+                              | subpacket_type_defined
+subpacket_type_undefined  ::= {0..255}--subpacket_type_specified</code></pre>
+<p><em>Subtype 2:</em> Signature creation time (5.2.3.4):</p>
+<pre><code>sp_signature_creation_time_body ::= signature_creation_time:timestamp</code></pre>
+<p><em>Subtype 3:</em> Issuer (5.2.3.5):</p>
+<pre><code>sp_signature_issuer ::= issuer:keyid</code></pre>
+<p><em>Subtype 3</em>: Signature expiration time (5.2.3.10):</p>
+<pre><code>sp_signature_creation_time ::= sig_expiration_time&#39;:timestamp_or_inf</code></pre>
+<p><em>Subtype 4</em>: Exportable certification (5.2.3.11):</p>
+<pre><code>sp_exportable_certification ::= 0x0|0x1
+                            &gt;&gt;= \exportable&#39;=Bool(x0)
+
+\exportable = IF /exportable&#39; THEN \exportable&#39; ELSE True</code></pre>
+<p><em>Subtype 5:</em> Trust signature (5.2.3.13):</p>
+<pre><code>sp_trust_signature ::= level:byte amount:byte
+
+let \trust_partial = level &gt;= 60
+let \trust_complete = level &gt;= 120</code></pre>
+<p><em>Subtype 6:</em> Regular expression (5.2.3.14):</p>
+<pre><code>sp_regular_expression ::= regex:byte[subpacketlen-1] 0x00</code></pre>
+<p><em>Subtype 7:</em> Revocable (5.2.3.12):</p>
+<pre><code>sp_revocable ::= 0x00|0x01
+\revocable = IF \revocable&#39; THEN \revocable&#39; ELSE True</code></pre>
+<p><em>Subtype 9:</em> Key expiration time (5.2.3.6):</p>
+<pre><code>sp_key_expiration_time ::= key_expiration_time&#39;:timestamp
+# additional condition: only on self-signature</code></pre>
+<p><em>Subtype 11:</em> Preferred symmetric algorithms (5.2.3.7):</p>
+<pre><code>sp_pref_symm_algo ::= Sequence[symm_algo]</code></pre>
+<p><em>Subtype 12:</em> Revocation key (5.2.3.15):</p>
+<pre><code>sp_revocation_key ::= 0x80|0xc0 algo_pubkey revocation_key:fingerprint
+                  &gt;&gt;= \sensitive = x0 == 0xc0</code></pre>
+<p><em>Subtype 20:</em> Notation data (5.2.3.16):</p>
+<pre><code>sp_notation_flags ::= 0x80|0x00 0x00 0x00 0x00
+                  &gt;&gt;= \human_readable = x0 == 0x80
+sp_notation_name_iana ::= (utf8_text--&#39;@&#39;)*
+dns_domain_name ::= # TODO
+sp_notation_name_user ::= (utf8_text--&#39;@&#39;) &#39;@&#39; dns_domain_name
+sp_notation_data ::= sp_notation_flags
+                     namelen:len_old2
+                     valuelen:len_old2
+                     &amp;((namelen+valuelen+8) == subpacketlen)
+                     name:utf8_text[namelen]
+                     value:bytes[valuelen]</code></pre>
+<p><em>Subtype 21:</em> Preferred hash algorithms (5.2.3.8);</p>
+<pre><code>sp_pref_hash_algo ::= Sequence[hash_algo]</code></pre>
+<p><em>Subtype 22:</em> Preferred compression algorithms (5.2.3.9):</p>
+<pre><code>sp_pref_comp_algo ::= Sequence[comp_algo]</code></pre>
+<p><em>Subtype 23:</em> Key server preferences (5.2.3.17):</p>
+<pre><code>sp_keyserver_prefs ::= 0x80|0x00 0x00[subpacketlen-1]
+#selfsig-only</code></pre>
+<p><em>Subtype 24:</em> Preferred key server (5.2.3.18):</p>
+<pre><code>sp_preferred_keyserver ::= uri:bytes[subpacketlen]</code></pre>
+<p><em>Subtype 25:</em> Primary user id (5.2.3.19):</p>
+<pre><code>sp_primary_userid ::= 0x00|0x01
+                  &gt;&gt;= \is_primary&#39; = (x0 == 0x01)
+\is_primary = IF /is_primary&#39; THEN \is_primary ELSE False</code></pre>
+<p><em>Subtype 26:</em> Policy URI (5.2.3.20):</p>
+<pre><code>sp_policy_uri ::= policy_uri:bytes[subpacketlen]</code></pre>
+<p><em>Subtype 27:</em> Key flags (5.2.3.21):</p>
+<pre><code>\kf_defined = {KF_CERTIFY                = 0x01,
+               KF_SIGN                   = 0x02,
+               KF_ENCRYPT_COMMUNICATIONS = 0x04,
+               KF_ENCRYPT_STORAGE        = 0x08,
+               KF_SPLIT_BY_SECRET_SHARE  = 0x10,
+               KF_AUTHENTICATION         = 0x20,
+               KF_PRIVATE_IS_MULTIHOLDER = 0x80}
+sp_key_flags ::= (map binary_or (poset kf_defined)) bytes[subpacketlen-1]
+
+# 0x10, 0x80 self-sig only for 0x1f 0x18 sig types</code></pre>
+<p><em>Subtype 28:</em> Signer's user id (5.2.3.22):</p>
+<pre><code>sp_signers_userid ::= userid</code></pre>
+<p><em>Subtype 29:</em> Reasons for revocation (5.2.3.23):</p>
+<p>A few machine-readable revocation-reason codes are defined:</p>
+<pre><code>rr_code_both ::=   RR_NO_REASON      =  0
+rr_code_key  ::=   RR_SUPERSEDED     =  1
+                 | RR_COMPROMISED    =  2
+                 | RR_RETIRED        =  3
+rr_code_cert ::=   RR_USERID_INVALID = 32
+rr_code_priv ::= 100..110
+rr_code ::=   rr_code_both
+            | &amp;(is_overkey sigtype) rr_code_key
+            | &amp;(is_certification sigtype) rr_code_cert
+            | rr_code_priv
+
+sp_reason_for_revocation ::= rr_code utf8_text[subpacketlen-1]</code></pre>
+<p><em>Subtype 30:</em> Features (5.2.3.24):</p>
+<pre><code>feat_mdc    ::= 0x00|0x01
+            &gt;&gt;= \use_mdc = x0 == 0x01
+sp_features ::= feat_mdc bytes[subpacketlen-1]</code></pre>
+<p><em>Subtype 31:</em> Signature target (5.2.3.25):</p>
+<pre><code>target_hash_algo ::= algo_hash
+                 &gt;&gt;= \=targethashlen = hashlen
+sp_signature_target ::= algo_pubkey
+                        target_hash_algo
+                        hash:bytes[targethashlen]
+
+# revocation, third-party, timestamp</code></pre>
+<p><em>Subtype 32:</em> Embedded signature (5.2.3.26):</p>
+<pre><code>sp_embedded_signature ::= signature_packet_body</code></pre>
+<h3 id="version-3-signatures">Version 3 signatures</h3>
+<p>The version 3 signature packet format (5.2.2):</p>
+<pre><code>sig_asfs_v3        ::= sig_asf_rsa | sig_asf_dsa
+sig_body_hashed_v3 ::= sig_type_v3 sig_creation_time
+sig_body_v3        ::= 0x03
+                       0x05
+                       sig_body_hashed_v3
+                       sig_signer_keyid:keyid
+                       pubkey_algo
+                       hash_algo
+                       sig_left2
+                       sig_asfs_v3</code></pre>
+<h3 id="version-4-signatures">Version 4 signatures</h3>
+<p>The version 4 signature packet format (5.2.3):</p>
+<pre><code>sig_asfs_v4        ::= sig_asf_rsa | sig_asf_dsa | sig_asf_ecdsa
+sig_body_v4        ::= 0x04
+                       sig_type_v4
+                       pubkey_algo
+                       hash_algo
+                       hashed_subpackets
+                       unhashed_subpackets
+                       sig_left2
+                       sig_asfs_v4</code></pre>
+<h3 id="signature-body">Signature body</h3>
+<pre><code>sig_body           ::= sig_body_v3 || sig_body_v4</code></pre>
+<h2 id="tag-3-symmetrically-encrypted-session-key">Tag 3: Symmetrically encrypted session key</h2>
+<p>RFC 4880 s. 5.3:</p>
+<pre><code>skesk_esk   ::= bytes[length - 3]
+skesk_body  ::= 0x04 symm_algo s2k_spec skesk_esk</code></pre>
+<p>QQQQ: RFC 6337 limitations?</p>
+<h2 id="tag-4-one-pass-signature-tag-4">Tag 4: One-pass signature (tag 4)</h2>
+<p>A useful new packet type introduced in version 4.</p>
+<pre><code>onepass_sig_nested ::= 0x00|0x01
+                   &gt;&gt;= \x = Bool(x)
+onepass_sig_body ::= 0x03
+                     sig_type_v4
+                     hash_algo
+                     pubkey_algo
+                     onepass_sig_signer_keyid:keyid
+                     onepass_sig_nested</code></pre>
+<h2 id="tags-56714-asymmetric-keys">Tags 5,6,7,14: Asymmetric keys</h2>
+<h3 id="packet-tags-1">Packet tags</h3>
+<p><em>Tag 6. Public-key:</em></p>
+<pre><code>publickey_body    ::= pubkey</code></pre>
+<p><em>Tag 14. Public-subkey:</em></p>
+<pre><code>publicsubkey_body ::= pubkey</code></pre>
+<p><em>Tag 5. Secret-key:</em></p>
+<pre><code>secretkey_body    ::= pubkey secretkey</code></pre>
+<p><em>Tag 7. Secret-subkey:</em></p>
+<pre><code>secretsubkey_body ::= pubkey secretkey</code></pre>
+<h3 id="definitions-common-to-public-and-secret-keys">Definitions common to public and secret keys</h3>
+<h4 id="algorithm-specific-fields-1">Algorithm-specific fields</h4>
+<h5 id="prime-based-crypto-2">Prime-based crypto</h5>
+<pre><code>rsa_n, rsa_e          = mpi, mpi
+pubkey_asf_rsa_v3   ::= rsa_n rsa_e
+pubkey_asf_rsa      ::= &amp;(is_rsa pubkey_algo)
+
+dsa_p, dsa_q, dsa_y   = mpi, mpi, mpi
+pubkey_asf_dsa      ::= &amp;pubkey_algo==DSA dsa_p:mpi dsa_q:mpi dsa_y:mpi
+
+pubkey_asf_elg      ::= &amp;pubkey_algo==ELG_E elg_p:mpi elg_q:mpi
+
+# TODOX942</code></pre>
+<h5 id="elliptic-curve-crypto-2">Elliptic-curve crypto</h5>
+<p>RFC 6637 s. 9:</p>
+<pre><code>pubkey_asf_ecdsa    ::= &amp;pubkey_algo==ECDSA
+                        curveoid
+                        ec_pubpoint:mpi
+pubkey_asf_ecdh     ::= &amp;pubkey_algo==ECDH
+                        curveoid
+                        ec_pubpoint:mpi
+                        0x03 0x01
+                        ecdh_kdf_params
+pubkey_asf_ec       ::= pubkey_asf_ecdsa | pubkey_asf_ecdh</code></pre>
+<h4 id="pubkey_asfs">pubkey_asfs</h4>
+<pre><code>pubkey_asfs         ::= (  pubkey_asf_elg
+                         | pubkey_asf_dsa
+                         | pubkey_asf_rsa
+                         | pubkey_asf_ec  )</code></pre>
+<h3 id="public-key-version-3">Public key version 3</h3>
+<p>RFC 4880 s. 5.5.2:</p>
+<p>The key's expiration is embedded in the key packet for V3 keys:</p>
+<pre><code>let \creation_plus_days = IF x0!=0 | x1!=0
+                          THEN (Nat(x0)&lt;&lt;8 + Nat(x1))*(24*3600)
+                          ELSE Inf
+pubkey_expiration_days ::= bytes bytes
+                       &gt;&gt;= \pubkey_expiration_time =
+                              (creation_plus_days x0 x1)
+                              + pubkey_creation_time</code></pre>
+<p>The key format:</p>
+<pre><code>pubkey_v3              ::= 0x03
+                           pubkey_creation_time:timestamp
+                           pubkey_expiration_days
+                           pubkey_asf_rsa</code></pre>
+<h3 id="public-key-version-4">Public key version 4</h3>
+<p>RFC 4880 s. 5.5.2:</p>
+<p>V4 keys are somewhat simpler:</p>
+<pre><code>pubkey_v4              ::= 0x04
+                           pubkey_creation_time:timestamp
+                           pubkey_algo
+                           pubkey_asfs</code></pre>
+<h3 id="secret-keys">Secret keys</h3>
+<p>RFC 4880 s. 5.5.3.</p>
+<h4 id="secret-key-s2k">Secret key S2K</h4>
+<h5 id="secret-key-checksum-conventions">Secret key checksum conventions</h5>
+<pre><code>s2k_checksum   ::= &amp;convention=&quot;cksum&quot; cksum=two_octet
+s2k_hash       ::= &amp;convention=&quot;mdc&quot; sha1_hash
+s2k_sum        ::= s2k_checksum | s2k_hash | \epsilon</code></pre>
+<h5 id="secret-key-s2k-conventions">Secret key S2K conventions</h5>
+<pre><code>seckey_enc_iv  ::= bytes[blocksize(symm_algo)]
+s2k_convention_unencrypted ::= S2K_UNENCRYPTED=0
+                           &gt;&gt;= \sumtype = ??
+s2k_convention_encrypted   ::= (254 | 255)
+                               symm_algo
+                               s2k_spec
+                               seckey_enc_iv?
+                           &gt;&gt;= \sumtype = IF 254 THEN &quot;mdc&quot; ELSE &quot;cksum&quot;,
+                               \enc = true
+s2k_convention_otherenc    ::= symm_algo seckey_enc_iv?
+                           &gt;&gt;= \sumtype = &quot;cksum&quot;,
+                               \enc = true,
+                               \hash_algo = MD5,
+                               \s2k_type = S2K_SIMPLE</code></pre>
+<h5 id="s2k_convention">s2k_convention</h5>
+<pre><code>s2k_convention ::= (   S2K_UNENCRYPTED
+                    | s2k_convention_encrypted
+                    | s2k_convention_otherenc )
+                   s2k_sum</code></pre>
+<h5 id="rfc-6637-s2k-convention-limitations">RFC 6637 S2K convention limitations</h5>
+<p>RFC 6637 s. 13, seems to be on the verge of requiring MDCs for EC private keys. QQQQ: Some impls do; is this mandatory? QQQQ: Does the hash-algorithm limitation apply for the RFCs?</p>
+<h4 id="secret-key-algorithm-specific-fields">Secret key algorithm-specific fields</h4>
+<pre><code># RSA_ES, RSA_E, RSA_S
+seckey_asf_rsa ::= &amp;(is_rsa pubkey_algo)
+                   rsa_d:mpi
+                   rsa_p:mpi
+                   rsa_q:mpi
+                   rsa_u:mpi
+# DSA
+seckey_asf_dsa ::= &amp;pubkey_algo==DSA
+                   dsa_x:mpi
+# ELG_E
+seckey_asf_elg ::= &amp;pubkey_algo==ELG_E
+                   elg_x:mpi
+# ECDH/ECDSA (RFC 6637 s. 9)
+seckey_asf_ec  ::= &amp;(is_ec pubkey_algo)
+                   ec_privat_scalar:mpi</code></pre>
+<h4 id="secret-keys-1">Secret keys</h4>
+<p>TODO: parameterize length of enckey by enclosur and overhead</p>
+<pre><code>seckey_enckey  ::= &amp;enc bytes*
+seckey_asfs    ::= seckey_asf_rsa | seckey_asf_dsa | seckey_asf_elg
+seckey_unencrypted ::= seckey_asfs (s2k_cksum | s2k_hash)
+seckey         ::= s2k_convention  (seckey_enckey | seckey_unencrypted)</code></pre>
+<h1 id="tag-8-compressed-data">Tag 8: Compressed data</h1>
+<pre><code># RFC 4880 s. 5.6
+compressed_data ::= bytes[length-1]
+compressed_body ::= comp_algo compressed_data</code></pre>
+<h1 id="tag-9-symmetrically-encrypted-data-packet">Tag 9: Symmetrically encrypted data packet</h1>
+<pre><code> # RFC 4880 s. 5.7
+ sedp_body       ::= bytes[length]</code></pre>
+<h1 id="tag-10-marker">Tag 10: Marker</h1>
+<pre><code> # RFC 4880 s. 5.8
+ marker_body     ::= &quot;PGP&quot;</code></pre>
+<h1 id="tag-11-literal">Tag 11: Literal</h1>
+<pre><code># RFC 4880 s. 5.9
+LITERAL_LOCAL = &#39;l&#39; | &#39;1&#39;
+# The compatibility predicate for &#39;local&#39; format
+let \islocal x = x \in {&#39;l&#39;, &#39;1&#39;}
+literal_format      ::= (  LITERAL_BINARY=&#39;b&#39;
+                         | LITERAL_TEXT=&#39;t&#39;
+                         | LITERAL_UTF8=&#39;u&#39;
+                         | literal_local )
+literal_filenamelen ::= len_old1
+literal_filename    ::= bytes[literal_filenamelen]
+                    &gt;&gt;= \literal_datalen = length-literal_filenamelen-6
+literal_date        ::= timestamp
+literal_data        ::= (  &amp;literal_format=&#39;b&#39;       bytes[literal_datalen]
+                         | &amp;literal_format=&#39;t&#39;       latin1_text[literal_datalen]
+                         | &amp;literal_format=&#39;u&#39;       utf8_text[literal_datalen]
+                         | &amp;(islocal literal_format) local_text[literal_datalen])
+literal_body        ::= literal_format literal_filenamelen literal_filename
+                        literal_date literal_data</code></pre>
+<h1 id="tag-12-trust">Tag 12: Trust</h1>
+<pre><code># RFC 4880 s. 5.10
+trust_body          ::= bytes[length]</code></pre>
+<h1 id="tag-13-user-id-tag-13">Tag 13: User ID (tag 13)</h1>
+<pre><code># RFC 4880 s. 5.11
+userid_body         ::= utf8_text[length]</code></pre>
+<h1 id="tag-17-user-attribute">Tag 17: User attribute</h1>
+<pre><code># RFC 4880 s. 5.12
+USERATTRIB_SUBPACKET_IMAGE = 1
+USERATTRIB_SUBPACKET_EXPERIMENTAL = 100..110
+USERATTRIB_SUBPACKET_IGNORED = 0 | 1..99 | 111..255</code></pre>
+<p>For image user attributes, the image header length is encoded as a little-endian ulint16:</p>
+<pre><code>image_header_len           ::= byte byte
+                           &gt;&gt;= \x = x0 + x1&lt;&lt;8</code></pre>
+<p>The only format supported by the standard is JFIF:</p>
+<pre><code>IMAGE_FORMAT_JPEG            = 1
+image_format               ::= IMAGE_FORMAT_JPEG | 100..110
+image_header               ::= 0x10 0x00 0x01 image_format
+                               0x00 0x00 0x00 0x00
+                               0x00 0x00 0x00 0x00
+                               0x00 0x00 0x00 0x00
+userattrib_subpacket_image ::= image_header bytes[subpacketlen-20]
+userattrib_subpacket_type  ::= (  userattrib_subpacket_image
+                                | USERATTRIB_SUBPACKET_EXPERIMENTAL
+                                | USERATTRIB_SUBPACKET_IGNORED)
+userattrib_subpacket       ::= newlen userattrib_subpacket_type bytes[newlen]
+                           &gt;&gt;= \data = x2,
+                               \type = x1,
+                               \subpacketlen = x0
+userattrib_body            ::= userattrib_subpacket* nil</code></pre>
+<h1 id="tag-18-symmetrically-encrypted-integrity-protected-data">Tag 18: Symmetrically encrypted integrity protected data</h1>
+<pre><code># RFC 4880 s. 5.13
+seipd_encdata ::= bytes[length-1]
+seipd_body    ::= 1 seipd_encdata</code></pre>
+<h1 id="tag-19-modification-detection-code">Tag 19: Modification detection code</h1>
+<pre><code># RFC 4880 s. 5.14
+mdc           ::= sha1_hash
+mdc_body      ::= mdc</code></pre>
+<h1 id="ascii-armor-and-cleartext-signatures">ASCII armor and cleartext signatures</h1>
+<h2 id="ascii-armor">ASCII Armor</h2>
+<p>RFC 4880 s. 6.</p>
+<pre><code>ascii_armor   ::= armor_header_line
+                  armor_header*
+                  blank_line
+                  armored_data
+                  armor_checksum
+                  armor_tail_line</code></pre>
+<h2 id="types-of-ascii-armor">Types of ASCII armor</h2>
+<pre><code>ascii_message ::= (  &quot;PGP MESSAGE&quot;
+                   | &quot;PGP PUBLIC KEY BLOCK&quot;
+                   | &quot;PGP PRIVATE KEY BLOCK&quot;
+                   | &quot;PGP MESSAGE, PART X/Y&quot;
+                   | &quot;PGP SIGNATURE&quot;)</code></pre>
+<p>TODO (additional semantic constraints) | &quot;PGP MESSAGE, PART X&quot;</p>
+<h2 id="ascii-armor-common-definitions">ASCII Armor common definitions</h2>
+<pre><code>blank_line        ::= whitespace* &quot;\n&quot;
+base64_line       ::= base64[76] &quot;\n&quot;
+last_base64       ::= base64[len] &quot;=&quot;[padlen]
+                      &amp;((padlen&lt;=3) &amp;&amp; ((len+padlen)&lt;=76))
+armored_data      ::= base64_line* last_base64 &quot;\n&quot;
+armor_checksum    ::= &quot;=&quot; base64[4] &quot;\n&quot;</code></pre>
+<h2 id="header-and-tail-lines">Header and tail lines</h2>
+<pre><code>armor_header_line ::= &quot;-----BEGIN &quot; ascii_message &quot;-----&quot; CRLF
+                  &gt;&gt;= \message = ascii_message,
+                      \armor_keys = nil,
+                      \armor_values = nil
+armor_tail_line   ::= &quot;-----END &quot; \message &quot;-----\n&quot;
+armor_key_other   ::= latin1_text - {&#39;:&#39;}
+armor_key         ::=   &quot;Version&quot;
+                      | &quot;Comment&quot;
+                      | &quot;MessageID&quot;
+                      | &quot;Hash&quot;
+                      | &quot;Charset&quot;
+                      | armor_key_other
+armor_header      ::= armor_key &quot;: &quot; armor_value
+                  &gt;&gt;= \armor_keys   = \armor_keys ++ [armor_key],
+                      \armor_values = \armor_values ++ [armor_value]</code></pre>
+<h2 id="cleartext-signatures">Cleartext signatures</h2>
+<p>RFC 4880 s. 7 defines a procedure for forming cleartext signatures.</p>
+<p>It requires &quot;dash-encoding&quot; of the signed message, to avoid parsing ambiguity.</p>
+<pre><code>let \dash_escape&#39; line   = IF (head line) == &quot;-&quot;
+                           THEN &quot;- &quot; ++ (tail line)
+                           ELSE line
+let \dash_escape lines   = (map \dash_escape) lines
+let \dash_unescape&#39; line = IF (select line 0 3) == &quot;- -&quot;
+                           THEN &quot;-&quot; ++ (tail tail tail line)
+                           ELSE line
+let \dash_unescape lines = (map \dash_unescape) lines
+dash_escaped_text    ::= (dash_escape utf8_crlf_text*)        CRLF?
+                     &gt;&gt;= \=x = (dash_unescape x0)</code></pre>
+<p>The cleartext signature format is then given by:</p>
+<pre><code>cleartext_header     ::= &quot;-----BEGIN PGP SIGNED MESSAGE-----&quot; CRLF
+cleartext_sig        ::= ascii_armor &amp;message==&quot;PGP SIGNATURE&quot;
+
+cleartext_signature  ::= cleartext_header
+                         dash_escaped_text
+                         cleartext_sig</code></pre>
+<h1 id="packet-composition">Packet composition</h1>
+<p>TODO</p>
+<h2 id="transferrable-key-packets">Transferrable key packets</h2>
+<h2 id="sign-then-encrypt">Sign-then-encrypt</h2>
+<h2 id="encrypt-then-sign">Encrypt-then-sign</h2>
+<h2 id="encrypt-only">Encrypt-only</h2>
+<h2 id="sign-only">Sign-only</h2>

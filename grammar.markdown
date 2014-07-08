@@ -4,29 +4,6 @@ OpenPGP syntax and semantic validity
 ------------------
 
 
-/*yaml:
-oldlentypes:
-  - [0x0, 'len_old1']
-  - [0x1, 'len_old2']
-  - [0x2, 'len_old4']
-_oldtagtypes: {1: 'pkesk', 2: 'sig', 3: 'skesk', 4: 'onepass_sig', 5: 'secretkey',
-               6: 'publickey', 7: 'secretsubkey', 8: 'compressed', 9: 'sedp',
-               10: 'marker', 11: 'literal', 12: 'trust', 13: 'userid', 14: 'publicsubkey'}
-_newtagtypes: { 17: 'userattrib', 18: 'seipd', 19: 'mdc'}
-*/
-/*py:
-oldtagtypes = [(i, _oldtagtypes.get(i, 'private{}'.format(i)))
-               for i in range(16)]
-newtagtypes = [(i, _newtagtypes.get(i, 'private{}'.format(i)))
-               for i in range(16, 24)]
-def oldptag(ptagbits, length_type):
-  return '0x{:02x} {}'.format(ptagbits, length_type)
-def oldptags(ptagbits):
-  return ' | '.join(oldptag(ptagbits << 2 | length_type[0], length_type[1])
-                  for length_type in oldlentypes)
-def newptag(ptagbits):
-  return '0x{:02x}'.format(0b11000000 | ptagbits)
-*/
 
 Introduction
 ============
@@ -165,20 +142,75 @@ implementations.
 
 All 4-bit tag types, old- or new-format PTags:
 
-/*% for tag_type_bits, tag_type in oldtagtypes */
-    `tag_type` ::=\
-      (  `oldptags(tag_type_bits)` | `newptag(tag_type_bits)` len_new)
-      (`tag_type.rstrip('0123456789')`_body | invalid_tag_body)
-/*% endfor */
+    private0 ::=\
+      (  0x00 len_old1 | 0x01 len_old2 | 0x02 len_old4 | 0xc0 len_new)
+      (private_body | invalid_tag_body)
+    pkesk ::=\
+      (  0x04 len_old1 | 0x05 len_old2 | 0x06 len_old4 | 0xc1 len_new)
+      (pkesk_body | invalid_tag_body)
+    sig ::=\
+      (  0x08 len_old1 | 0x09 len_old2 | 0x0a len_old4 | 0xc2 len_new)
+      (sig_body | invalid_tag_body)
+    skesk ::=\
+      (  0x0c len_old1 | 0x0d len_old2 | 0x0e len_old4 | 0xc3 len_new)
+      (skesk_body | invalid_tag_body)
+    onepass_sig ::=\
+      (  0x10 len_old1 | 0x11 len_old2 | 0x12 len_old4 | 0xc4 len_new)
+      (onepass_sig_body | invalid_tag_body)
+    secretkey ::=\
+      (  0x14 len_old1 | 0x15 len_old2 | 0x16 len_old4 | 0xc5 len_new)
+      (secretkey_body | invalid_tag_body)
+    publickey ::=\
+      (  0x18 len_old1 | 0x19 len_old2 | 0x1a len_old4 | 0xc6 len_new)
+      (publickey_body | invalid_tag_body)
+    secretsubkey ::=\
+      (  0x1c len_old1 | 0x1d len_old2 | 0x1e len_old4 | 0xc7 len_new)
+      (secretsubkey_body | invalid_tag_body)
+    compressed ::=\
+      (  0x20 len_old1 | 0x21 len_old2 | 0x22 len_old4 | 0xc8 len_new)
+      (compressed_body | invalid_tag_body)
+    sedp ::=\
+      (  0x24 len_old1 | 0x25 len_old2 | 0x26 len_old4 | 0xc9 len_new)
+      (sedp_body | invalid_tag_body)
+    marker ::=\
+      (  0x28 len_old1 | 0x29 len_old2 | 0x2a len_old4 | 0xca len_new)
+      (marker_body | invalid_tag_body)
+    literal ::=\
+      (  0x2c len_old1 | 0x2d len_old2 | 0x2e len_old4 | 0xcb len_new)
+      (literal_body | invalid_tag_body)
+    trust ::=\
+      (  0x30 len_old1 | 0x31 len_old2 | 0x32 len_old4 | 0xcc len_new)
+      (trust_body | invalid_tag_body)
+    userid ::=\
+      (  0x34 len_old1 | 0x35 len_old2 | 0x36 len_old4 | 0xcd len_new)
+      (userid_body | invalid_tag_body)
+    publicsubkey ::=\
+      (  0x38 len_old1 | 0x39 len_old2 | 0x3a len_old4 | 0xce len_new)
+      (publicsubkey_body | invalid_tag_body)
+    private15 ::=\
+      (  0x3c len_old1 | 0x3d len_old2 | 0x3e len_old4 | 0xcf len_new)
+      (private_body | invalid_tag_body)
 
 ## New-format tag types (type > 15)
 
 All 6-bit tag types > 15, new-format PTags only:
 
-/*% for tagtypebits, tag_type in newtagtypes */
-    `tag_type` ::=\
-      `newptag(tagtypebits)` len_new (`tag_type.rstrip('0123456789')`_body | invalid_tag_body)
-/*%endfor */
+    private16 ::=\
+      0xd0 len_new (private_body | invalid_tag_body)
+    userattrib ::=\
+      0xd1 len_new (userattrib_body | invalid_tag_body)
+    seipd ::=\
+      0xd2 len_new (seipd_body | invalid_tag_body)
+    mdc ::=\
+      0xd3 len_new (mdc_body | invalid_tag_body)
+    private20 ::=\
+      0xd4 len_new (private_body | invalid_tag_body)
+    private21 ::=\
+      0xd5 len_new (private_body | invalid_tag_body)
+    private22 ::=\
+      0xd6 len_new (private_body | invalid_tag_body)
+    private23 ::=\
+      0xd7 len_new (private_body | invalid_tag_body)
 
 # Algorithms
 
