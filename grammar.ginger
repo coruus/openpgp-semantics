@@ -46,6 +46,21 @@ TODO cleanup and make bindings consistent
     map : (T -> T) -> (Sequence[T] -> Sequence[T])
     take : (Sequence, Nat, Nat) -> (Sequence)
 
+## Notes on symbols
+
+XPEG-like grammar; symbols, with fixity patterns:
+
+    \_    : the lambda symbol; introduces a name binding
+    /_    : tests for symbol binding
+    &_    : allows parsing to proceed only if proposition is equal to True
+    _++_  : sequence concatenation
+    _--_  : set (or production) subtraction
+    _/_   : set (or production) symmetric difference
+    >>=_  : semantic reduction of a production
+    _::=_ : a production
+    _=_   : a named byte
+
+
 Basic datatypes
 ---------------
 
@@ -57,6 +72,10 @@ Unsigned big-endian integers (ubints):
                >>= \x = x0<<8 + x1
     four_octet ::= two_octet two_octet
                >>= \x = x0<<16 + x1
+
+Sequences of bytes:
+
+    bytes[Nat] : Sequence{Nat}[Nat]
 
 Old-style lengths are just ubints; their length is implicitly selected
 by other syntactic elements.
@@ -98,9 +117,13 @@ Some other commonly used types:
 
     sha1_hash   ::= byte[20]
     fingerprint ::= sha1_hash
-    timestamp   ::= four_octet
+
+And timestamps with a point at infinity:
+
+    Time : (Nat+Inf)
+    timestamp   ::= four_octet:Time
     timestamporinf ::= timestamp
-                   >>= \x = IF x0 == 0 THEN Inf ELSE x0
+                   >>= \x = IF x0 == 0 THEN Inf:Time ELSE x0
 
 # Elliptic curve cryptography definitions
 
@@ -137,15 +160,13 @@ RFC 4880 s. 4.2.0.
           1 0=========================
           | | ------------- packet tag
           | | | | | | ----- length type
-          | | | | | | | |
          +---------------+
     PTag |7 6 5 4 3 2 1 0|
          +---------------+
           | | | | | | | |
           | | ------------- packet tag
-          1 1 =======================
+          1 1 ========================
           ================= new-format
-
 
 ## Special packet tag types
 

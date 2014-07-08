@@ -10,6 +10,17 @@ _|_  : ({Type}A, {Type}B) -&gt; (A + B)
 # (Note that the | operator represents ordered choice.)
 map : (T -&gt; T) -&gt; (Sequence[T] -&gt; Sequence[T])
 take : (Sequence, Nat, Nat) -&gt; (Sequence)</code></pre>
+<h2 id="notes-on-symbols">Notes on symbols</h2>
+<p>XPEG-like grammar; symbols, with fixity patterns:</p>
+<pre><code>\_    : the lambda symbol; introduces a name binding
+/_    : tests for symbol binding
+&amp;_    : allows parsing to proceed only if proposition is equal to True
+_++_  : sequence concatenation
+_--_  : set (or production) subtraction
+_/_   : set (or production) symmetric difference
+&gt;&gt;=_  : semantic reduction of a production
+_::=_ : a production
+_=_   : a named byte</code></pre>
 <h2 id="basic-datatypes">Basic datatypes</h2>
 <p>Unsigned big-endian integers (ubints):</p>
 <pre><code>byte       ::= 0..255
@@ -18,6 +29,8 @@ two_octet  ::= byte byte
            &gt;&gt;= \x = x0&lt;&lt;8 + x1
 four_octet ::= two_octet two_octet
            &gt;&gt;= \x = x0&lt;&lt;16 + x1</code></pre>
+<p>Sequences of bytes:</p>
+<pre><code>bytes[Nat] : Sequence{Nat}[Nat]</code></pre>
 <p>Old-style lengths are just ubints; their length is implicitly selected by other syntactic elements.</p>
 <pre><code>len_old1 ::= byte
          &gt;&gt;= \length = x0
@@ -43,10 +56,12 @@ len_new  ::= (len_new1 | len_new2 | len_new4 | len_new_partial)</code></pre>
 <h2 id="other-common-types">Other common types</h2>
 <p>Some other commonly used types:</p>
 <pre><code>sha1_hash   ::= byte[20]
-fingerprint ::= sha1_hash
-timestamp   ::= four_octet
+fingerprint ::= sha1_hash</code></pre>
+<p>And timestamps with a point at infinity:</p>
+<pre><code>Time : (Nat+Inf)
+timestamp   ::= four_octet:Time
 timestamporinf ::= timestamp
-               &gt;&gt;= \x = IF x0 == 0 THEN Inf ELSE x0</code></pre>
+               &gt;&gt;= \x = IF x0 == 0 THEN Inf:Time ELSE x0</code></pre>
 <h1 id="elliptic-curve-cryptography-definitions">Elliptic curve cryptography definitions</h1>
 <h3 id="curve-oids">Curve OIDs</h3>
 <p>RFC 6637 s. 11:</p>
@@ -68,13 +83,12 @@ ecdh_kdf_params ::= ecdh_kdf_algo:ec_hash_algo ecdh_kek_algo</code></pre>
       1 0=========================
       | | ------------- packet tag
       | | | | | | ----- length type
-      | | | | | | | |
      +---------------+
 PTag |7 6 5 4 3 2 1 0|
      +---------------+
       | | | | | | | |
       | | ------------- packet tag
-      1 1 =======================
+      1 1 ========================
       ================= new-format</code></pre>
 <h2 id="special-packet-tag-types">Special packet tag types</h2>
 <p>We define two types to represent packets whose contents are opaque:</p>
