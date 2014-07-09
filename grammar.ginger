@@ -394,7 +394,7 @@ the I&S S2K specifiers are used:
     # RFC 6637 s. 13
     s2k_ec           ::= s2k_iterated
 
-Since SHA1 only provides 180-bits of output, it is impossible to achieve
+Since SHA1 only provides 160-bits of output, it is impossible to achieve
 the 192-bit security strength required by RFC 6637 s. 12.2.1 using it:
 
     # RFC 6637 s. 12.2.1

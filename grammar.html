@@ -280,7 +280,7 @@ let \decode_s2k_c c =
 <p>RFC 6637 requires that, when used for protecting a private EC key, only the I&amp;S S2K specifiers are used:</p>
 <pre><code># RFC 6637 s. 13
 s2k_ec           ::= s2k_iterated</code></pre>
-<p>Since SHA1 only provides 180-bits of output, it is impossible to achieve the 192-bit security strength required by RFC 6637 s. 12.2.1 using it:</p>
+<p>Since SHA1 only provides 160-bits of output, it is impossible to achieve the 192-bit security strength required by RFC 6637 s. 12.2.1 using it:</p>
 <pre><code># RFC 6637 s. 12.2.1
 s2k_ec_192b       ::= S2K_ITERATED=0x03
                       hash_algo_sha2_512
