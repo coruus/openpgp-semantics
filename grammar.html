@@ -1,7 +1,13 @@
-<h1 id="openpgp-syntax-and-semantic-validity">OpenPGP syntax and semantic validity</h1>
+<h1 id="openpgp-syntax-and-semantic-constraints">OpenPGP syntax and semantic constraints</h1>
 <h2 id="incomplete-draft">(incomplete draft)</h2>
 <h1 id="introduction">Introduction</h1>
 <p>A note: All references are to RFC 4880, unless otherwise specified.</p>
+<p>Two parts:</p>
+<ol type="1">
+<li>A packet-level semantics of OpenPGP packets and cryptographic validity.</li>
+<li>A byte-level syntactic validity semantics.</li>
+</ol>
+<p>The direction of refinement is unusual; everything else is not.</p>
 <h1 id="common-definitions">Common definitions</h1>
 <p>TODO cleanup and make bindings consistent</p>
 <h2 id="notes-on-types">Notes on types</h2>
@@ -20,7 +26,9 @@ _--_  : set (or production) subtraction
 _/_   : set (or production) symmetric difference
 &gt;&gt;=_  : semantic reduction of a production
 _::=_ : a production
-_=_   : a named byte</code></pre>
+_=_   : a named byte (equivalent to a token)
+T(_)  : type &quot;coercion&quot;
+_:_   : instantiation of a production with explicit naming</code></pre>
 <h2 id="basic-datatypes">Basic datatypes</h2>
 <p>Unsigned big-endian integers (ubints):</p>
 <pre><code>byte       ::= 0..255
@@ -47,12 +55,27 @@ len_new4 ::= 255 byte byte byte byte                      # 4.2.2.3
          &gt;&gt;= \length = Nat(x1&lt;&lt;24 + x2&lt;&lt;16 + x3&lt;&lt;8 + x4)
 len_new  ::= (len_new1 | len_new2 | len_new4 | len_new_partial)</code></pre>
 <p>New-style lengths with their first byte in 192..223 encode a <em>partial</em> body length (4.2.2.4),</p>
-<pre><code>let partial_length x = Nat(1 &lt;&lt; (x&amp;0x1f))</code></pre>
-<p>which, by definition, is in {2^n : n /in 0..30. Other semantic conditions apply:</p>
+<pre><code>let partial_length x = Nat(1 &lt;&lt; ( x &amp; 0x1f))</code></pre>
+<p>which, by definition, is in {2^n : n 0..30}. Other semantic conditions apply to partial body lengths:</p>
 <pre><code> packet_body &lt;&lt;= nil
  len_new_partial ::= 224..254 bytes[length] len_new
                  &gt;&gt;= \length = partial_length(x0)
      packet_body &lt;&lt;= packet_body ++ x1</code></pre>
+<h2 id="multiprecision-integers">Multiprecision integers</h2>
+<p>A multiprecision integer, generally:</p>
+<pre><code>any_mpi ::= bitlen:len_old2 bytes[bytelen]
+        &gt;&gt;= \bytelen = (bitlen + 7) / 8</code></pre>
+<p>RFC 4880 requires MPIs to be in minimal form, which makes the map a bijection. Doing this casewise, where &lt;&lt;&lt; is the usual rotary left shift operator:</p>
+<pre><code>zero_mpi ::= 0x0
+         &gt;&gt;= \= 0
+         &gt;&gt;= \bytelen = 0
+nonzero_mpi ::= h:byte l:byte o:byte bytes[bytelen-1]
+                &amp;(o &amp; (0x80 &gt;&gt; topbit)) != 0
+            &gt;&gt;= \topbit = 0x80 &lt;&lt;&lt; (8 - (l % 8))
+            &gt;&gt;= \bytelen = (bitlen + 7) / 8
+
+valid_mpi ::= zero_mpi | nonzero_mpi</code></pre>
+<p>(This is not ambiguous because choice is ordered.)</p>
 <h2 id="other-common-types">Other common types</h2>
 <p>Some other commonly used types:</p>
 <pre><code>sha1_hash   ::= byte[20]
@@ -71,23 +94,40 @@ curve_oid_p521 ::= 0x05 0x2b 0x81 0x04 0x00 0x23
 
 ec_curve_oid   ::= curve_oid_p256 | curve_oid_p384 | curve_oid_p521</code></pre>
 <h3 id="algorithm-limitations">Algorithm limitations</h3>
-<p>RFC 6637 s. 11-13: SHA2 is the only permitted hash algorithm for the ECDH KDF, and for ECDSA hashes-to-sign:</p>
-<pre><code>ec_hash_algo  ::= hash_algo_sha2</code></pre>
-<p>For ECDH:</p>
+<p>SHA2 is the only permitted hash algorithm for ECDSA hashes-to-sign:<a href="#fn1" class="footnoteRef" id="fnref1"><sup>1</sup></a></p>
+<pre><code>ecdsa_hash_algo     ::= hash_algo_sha2</code></pre>
+<p>SHA2-256 or stronger is required for use with the ECDH KDF:</p>
+<pre><code>ecdh_kdf_hash_algo  ::= hash_algo_sha2_128b</code></pre>
+<p>For the 192-bit profile described in RFC 6637 s. 12.2.1:</p>
+<pre><code>ec_hash_algo_192 ::= SHA2_384 | SHA2_512</code></pre>
+<p>For the 128-bit profile described in RFC 6637 s. 12.2.2:</p>
+<pre><code>ec_hash_algo_128 ::= SHA2_256 | SHA2_384 | SHA2_512</code></pre>
+<p>Suite B's profiles further restrict algorithms to:</p>
+<pre><code>ec_hash_algo_sb128 ::= SHA2_256
+ec_symm_algo_sb128 ::= AES128
+curve_oid_sb128    ::= curve_oid_p256
+
+ec_hash_algo_sb192 ::= SHA2_384
+ec_symm_algo_sb192 ::= AES256
+curve_oid_sb192    ::= curve_oid_p384</code></pre>
+<p>Only violation of the RFC 6337 requirements is considered a semantic constraint violation. &quot;This document is primarily concerned with format specification&quot; rather than &quot;interoperability concerns arising from fewer allowed algorithms&quot; in Suite B. (6637.12.2)</p>
+<p>For Elliptic-Curve Diffie-Hellman (ECDH):</p>
 <pre><code>ecdh_kek_algo   ::= symm_algo_aes
-ecdh_kdf_params ::= ecdh_kdf_algo:ec_hash_algo ecdh_kek_algo</code></pre>
+ecdh_kdf_params ::= ecdh_kdf_hash_algo
+                    ecdh_kek_algo</code></pre>
 <h1 id="packet-tags">Packet tags</h1>
 <p>RFC 4880 s. 4.2.0.</p>
 <h2 id="ptag-bit-level-diagram">PTag bit-level diagram</h2>
+<p>Using the big-endian bit-convention, where 0b10 == 2:</p>
 <pre><code>      ================= old-format
-      1 0=========================
-      | | ------------- packet tag
-      | | | | | | ----- length type
+      1 0 ========================
+      | | ------------- packet tag   (4 bit)
+      | | | | | | ----- length type  (2 bit)
      +---------------+
 PTag |7 6 5 4 3 2 1 0|
      +---------------+
       | | | | | | | |
-      | | ------------- packet tag
+      | | ------------- packet tag   (6 bit)
       1 1 ========================
       ================= new-format</code></pre>
 <h2 id="special-packet-tag-types">Special packet tag types</h2>
@@ -181,7 +221,7 @@ let \is_rsae x       = (x == 2 || x == 1)
 let \is_rsas x       = (x == 3 || x == 1)
 let \is_rsa  x       = (x \in {1,2,3})</code></pre>
 <h4 id="other-prime-based-crypto">Other prime-based crypto</h4>
-<p>TODO(dlg): PS use of X9.42 DH?</p>
+<p>TODO(dlg): PS use of X9.42 DH? Found ref in PGP6 usability paper!</p>
 <pre><code>algo_elg_es        ::= ELG_ES=20
 algo_elg_enc       ::= ELG_E=16
 algo_dhx942_enc    ::= DH_X942=21
@@ -192,8 +232,8 @@ algo_prime_enc     ::= algo_elg_enc | algo_rsa_enc | algo_dhx942_enc
 # Prime-based signatures
 algo_prime_sig     ::= algo_rsa_sig | algo_dsa | algo_elg_es</code></pre>
 <h4 id="prime-based-crypto-status-predicate">Prime-based crypto status predicate</h4>
-<p>The status of prime-based-crypto algorithms, according to RFC4880:</p>
-<pre><code>let \algo_status x = CASE DH_X942 THEN &quot;reserved&quot;
+<p>The status of prime-based-crypto algorithms:</p>
+<pre><code>let \algo_status x = CASE DH_X942 THEN &quot;reserved for&quot;
                      CASE ELG_ES  THEN &quot;formerly&quot;
                      CASE RSA_ES  THEN &quot;deprecated&quot;</code></pre>
 <h3 id="elliptic-curve-crypto">Elliptic-curve crypto</h3>
@@ -209,49 +249,51 @@ let \algo_pk_shouldnt_process x = (   x \in PK_EXPERIMENTAL
                                    || x == ELG_ES)</code></pre>
 <h2 id="symmetric-key-algorithms">Symmetric-key algorithms</h2>
 <p>The symmetric-key encryption algorithms defined in RFC 4880 s. 9.1, extended by RFC 5581.</p>
-<pre><code>algo_symm           ::= algo_symm_modern | algo_symm_old | algo_symm_other</code></pre>
-<p>The &quot;plaintext&quot; algorithm, also known as (13)^2:</p>
-<pre><code>algo_symm_plaintext ::= PLAINTEXT=0</code></pre>
-<p>AES has to be broken out from other algorithms to support RFC 6637's constraints on KEK algorithm:</p>
+<pre><code>symm_algo           ::= symm_algo_modern | symm_algo_old | symm_algo_other</code></pre>
+<p>The &quot;plaintext&quot; algorithm, also known as (rot13)^-2:</p>
+<pre><code>symm_algo_plaintext ::= PLAINTEXT=0</code></pre>
+<p>AES has to be broken out from other algorithms to support RFC 6637's constraints on ECDH KEK algorithm:</p>
 <pre><code># Algorithms with &lt; 128-bit security strength
-algo_symm_old       ::= IDEA=1 | TDES=2 | CAST5=3 | BLOWFISH=4
+symm_algo_old       ::= IDEA=1 | TDES=2 | CAST5=3 | BLOWFISH=4
 # Advanced Encryption Standard
-algo_symm_aes       ::= AES128=7 | AES192=8 | AES256=9</code></pre>
+symm_algo_aes       ::= AES128=7 | AES192=8 | AES256=9</code></pre>
 <p>RFC 5581's extension to add Camellia:</p>
-<pre><code>algo_symm_camellia  ::= CAMELLIA128=11 | CAMELLIA192=12 | CAMELLIA256=13</code></pre>
+<pre><code>symm_algo_camellia  ::= CAMELLIA128=11 | CAMELLIA192=12 | CAMELLIA256=13</code></pre>
 <p>We also define a set of modern(-ish) crypto algorithms:</p>
 <pre><code># Algorithms with &gt;= 128-bit security strength, no weak keys
-algo_symm_modern    ::= (  algo_symm_aes
+symm_algo_modern    ::= (  symm_algo_aes
                          | TWOFISH=10
-                         | algo_symm_camellia )</code></pre>
+                         | symm_algo_camellia )</code></pre>
 <h3 id="unspecified-symmetric-crypto-algorithms">Unspecified symmetric crypto algorithms</h3>
 <p>We differentiate reserved, private, and undefined crypto algorithm numbers:</p>
 <pre><code>SYMM_RESERVED       ::= 5..6
 SYMM_PRIVATE        ::= 100..109
 SYMM_UNDEFINED      ::= 14..99 | 111..255
-algo_symm_other     ::= SYMM_RESERVED | SYMM_PRIVATE | SYMM_UNDEFINED</code></pre>
+symm_algo_other     ::= SYMM_RESERVED | SYMM_PRIVATE | SYMM_UNDEFINED</code></pre>
 <h2 id="hash-algorithms">Hash algorithms</h2>
-<pre><code>algo_hash          ::=  algo_hash_old
-                      | algo_hash_sha1
-                      | algo_hash_sha2
-                      | algo_hash_other</code></pre>
+<pre><code>hash_algo          ::=  hash_algo_old
+                      | hash_algo_sha1
+                      | hash_algo_sha2
+                      | hash_algo_other</code></pre>
 <h3 id="hash-algorithms-oldest">Hash algorithms, oldest</h3>
-<pre><code>algo_hash_old      ::= MD5=1 | RIPEMD160=3
-algo_hash_sha1     ::= SHA1=2</code></pre>
+<pre><code>hash_algo_old      ::= MD5=1 | RIPEMD160=3
+hash_algo_sha1     ::= SHA1=2</code></pre>
 <h3 id="hash-algorithms-sha-2">Hash algorithms, SHA-2</h3>
-<p>SHA2-512/384 is broken out separately; its use is required for the RFC 6637 s. 12.2.1 profile.</p>
-<pre><code>algo_hash_sha2_512 ::= SHA2_384=9 | SHA2_512=10
-algo_hash_sha2     ::= SHA2_224=11 | SHA2_256=8 | algo_hash_sha2_512</code></pre>
+<p>SHA2-512/384, SHA2-256, and SHA2-224 are broken out separately; the two profiles of RFC 6637 s. 12.2 enforce additional constraints for EC-based OpenPGP.</p>
+<pre><code>hash_algo_sha2_192b ::= SHA2_384=9  | SHA2_512=10
+hash_algo_sha2_128b ::= SHA2_256=8  | hash_algo_sha2_192b
+hash_algo_sha2      ::= SHA2_224=11 | hash_algo_sha2_512</code></pre>
 <h3 id="unspecified-hash-algorithms">Unspecified hash algorithms</h3>
 <pre><code>HASH_RESERVED      ::= 4..7
 HASH_PRIVATE       ::= 100..110
 HASH_UNDEFINED     ::= 111..255
-algo_hash_other    ::= HASH_RESERVED | HASH_PRIVATE | HASH_UNDEFINED</code></pre>
+hash_algo_other    ::= HASH_RESERVED | HASH_PRIVATE | HASH_UNDEFINED</code></pre>
 <h2 id="string-to-key-s2k-specifiers">String-to-key (S2K) specifiers</h2>
 <p>String-to-key (S2K) specifiers are used to combine a &quot;password&quot; and, optionally, salt into a symmetric encryption key. The specifier format is defined by RFC 4880 s. 3.7.1.</p>
+<pre><code>s2k_rfc4880       ::= s2k_simple | s2k_salted | s2k_iterated | s2k_error</code></pre>
 <h3 id="common-definitions-1">Common definitions</h3>
 <p>If salt is used, it is always 8 bytes long:</p>
-<p>s2k_salt ::= bytes[8]</p>
+<pre><code>s2k_salt          ::= bytes[saltlen=8]</code></pre>
 <h3 id="s2k-specifier-types">S2K specifier types</h3>
 <p>S2K <em>specifiers</em> should not be confused with S2K <em>conventions</em>; an S2K convention contains an S2K specifier.</p>
 <h4 id="undefined-s2k-specifiers">Undefined S2K specifiers</h4>
@@ -267,10 +309,9 @@ algo_hash_other    ::= HASH_RESERVED | HASH_PRIVATE | HASH_UNDEFINED</code></pre
 <p>Iterated and salted S2K specifiers are defined by RFC 4480 s. 3.7.1.3.</p>
 <p>A helper function to decode the encoded bytecount of hashed material,</p>
 <pre><code>\decode_s2k_c : Nat -&gt; (Nat -&gt; Nat)
-let \decode_s2k_c c =
-  let \bytecount passlen =
-    max(passlen + saltlen=8,
-        (16 + (c&amp;15)) &lt;&lt; ((c&gt;&gt;4) + 6))</code></pre>
+let \decode_s2k_c c = let \bytecount passlen =
+                            max(passlen + saltlen=8,
+                                (16 + (c&amp;15)) &lt;&lt; ((c&gt;&gt;4) + 6))</code></pre>
 <p>and the specifier definition:</p>
 <pre><code>s2k_iterated      ::= S2K_ITERATED=0x03
                       hash_algo
@@ -279,27 +320,65 @@ let \decode_s2k_c c =
 <h3 id="ec-private-key-s2k-specifiers">EC private key S2K specifiers</h3>
 <p>RFC 6637 requires that, when used for protecting a private EC key, only the I&amp;S S2K specifiers are used:</p>
 <pre><code># RFC 6637 s. 13
-s2k_ec           ::= s2k_iterated</code></pre>
-<p>Since SHA1 only provides 160-bits of output, it is impossible to achieve the 192-bit security strength required by RFC 6637 s. 12.2.1 using it:</p>
-<pre><code># RFC 6637 s. 12.2.1
+s2k_ec           ::= s2k_iterated
+
+
+# RFC 6637 s. 12.2.1
 s2k_ec_192b       ::= S2K_ITERATED=0x03
                       hash_algo_sha2_512
                       s2k_salt
                       s2k_encoded_count</code></pre>
 <p>RFC 6637 apparently does not forbid the use of SHA1 as the S2K hash function; but it dosn't state that it may be used, either. QQQQ: sha2 acceptable?</p>
-<h3 id="s2k-specifiers-generally">S2K specifiers, generally</h3>
-<pre><code>s2k_rfc4880       ::= s2k_simple | s2k_salted | s2k_iterated | s2k_error</code></pre>
-<h1 id="packet-bodies">Packet bodies</h1>
+<h1 id="packet-bodies-implicit">Packet bodies, implicit</h1>
+<h2 id="ckdf-aa1">CKDF-AA1</h2>
+<p>RFC 6637 s. 8:</p>
+<pre><code>kdf_params  ::= curve_oid
+                18
+                pubkey_ecdh_kdf_params
+                &quot;Anonymous Sender&quot; 0x20 0x20 0x20 0x20
+                encryption_key:sha1_hash</code></pre>
+<p>The Concatenation KDF (Approved Alternative 1), RFC 6637 s. 7:</p>
+<pre><code>let \kdf_ckdfaa1_in shared = 0x0 0x0 0x0 0x1
+                             (getx shared)
+                             kdf_params</code></pre>
+<h2 id="key-ids-and-fingerprints">Key IDs and fingerprints</h2>
+<p>RFC 4880 s. 12.2.</p>
+<p>Version 3 fingerprints are simple:</p>
+<pre><code>hashed_material_v3 ::= rsa_n rsa_e
+fingerprint_v3 ::= (md5 hashed_material_v3)</code></pre>
+<p>Version 3 key ids are formed by truncation of the RSA modulus:</p>
+<pre><code>keyid_v3 ::= (truncate rsa_n 8)</code></pre>
+<p>V4 fingerprints include irrelevant fields:</p>
+<pre><code>hashed_material_v4 ::= 0x99
+                       hashed_length:len_old2
+                       0x04
+                       timestamp
+                       pubkey_algo
+                       pubkey_asfs
+                   &gt;&gt;= \hashed_length = 1 + 4 + 1 + len(pubkey_asfs)
+fingerprint_v4 ::= (sha1 hashed_material_v4)</code></pre>
+<p>As partial compensation, V4 keyids are less malleable (though drawn from the weaker end of the SHA1 fingeprint):</p>
+<pre><code>keyid_v4 ::= (truncate fingerprint_v4 8)</code></pre>
+<h2 id="mdc">MDC</h2>
+<pre><code>mdc_hashed_material ::= prefix:bytes[16]
+                        prefix2 &amp;(prefix2 == prefix[0:2])
+                        0xd3
+                        20
+                        sha1_hash</code></pre>
+<h2 id="s2k-hashed-material">S2K hashed material</h2>
+<pre><code>s2k_contexts ::=   (cipher_keylen / hash_blocklen)
+                 + (1 IF cipher_keylen%hash_blocklen != 0 ELSE 0)</code></pre>
+<h1 id="packet-bodies-on-the-wire">Packet bodies on the wire</h1>
 <h2 id="tag-1-public-key-encrypted-session-key">Tag 1: Public-key encrypted session key</h2>
 <p>RFC 4880 s. 5.1:</p>
-<h3 id="prime-based-crypto-1">Prime based crypto</h3>
+<h3 id="prime-based-crypto-1">Prime-based crypto</h3>
 <pre><code># RSA-E/RSA-ES
 pkesk_rsa_asf         ::= algo_rsa_enc rsa_memodn:mpi
 # ELG-E
 pkesk_elge_asf        ::= algo_elg_enc elge_gkmodp:mpi elge_mykmodp:mpi
 # X942DH
 # TODO</code></pre>
-<h3 id="elliptic-curve-crypto-1">Elliptic curve crypto</h3>
+<h3 id="elliptic-curve-crypto-1">Elliptic-curve crypto</h3>
 <p>RFC 6637 s. 8:</p>
 <pre><code>pkesk_ecdh_wrappedkey ::= wrappedkeylen:32..254 bytes[wrappedkeylen]
 pkesk_ecdh_asf        ::= ec_ephem_pubkey:mpi pkesk_ecdh_wrappedkey</code></pre>
@@ -308,7 +387,7 @@ pkesk_ecdh_asf        ::= ec_ephem_pubkey:mpi pkesk_ecdh_wrappedkey</code></pre>
 pkesk_asf             ::= (pkesk_elge_asf | pkesk_rsa_asf | pkesk_ecdh_asf)
 pkesk_body            ::= pkesk_v keyid pkesk_asf</code></pre>
 <h2 id="tag-2-signature-tag-2">Tag 2: Signature (tag 2)</h2>
-<p>RFC 4880 s. 5.2.1</p>
+<p>RFC 4880 s. 5.2.1.</p>
 <h3 id="common-definitions-2">Common definitions</h3>
 <p>Some definitions common to all signature formats:</p>
 <pre><code>sig_creation_time  ::= timestamp
@@ -339,6 +418,7 @@ sig_type_v4        ::= SIG_V4 | sig_type_unknown
 sig_type_unknown   ::= (0x03..0x09 | 0x14..0x17 | 0x1a..0x1e | 0x21..0x27
                         | 0x29 | 0x31..0x39 | 0x41..0x49 | 0x51..0xff)</code></pre>
 <p>QQQQ: Should an unknown signature type produce an error here?</p>
+<p>TODO: Substantial semantic constraints on valid packet compositions.</p>
 <h3 id="algorithm-specific-fields">Algorithm specific fields</h3>
 <h4 id="prime-based-crypto-algorithm-specific-fields">Prime-based crypto algorithm-specific fields</h4>
 <p>RFC 4880 s. 5.2.2:</p>
@@ -374,7 +454,7 @@ subpacket ::= subpacket_length:len_new&#39;
                    | subpacket_type_reserved
                    | subpacket_type_specified
                    | subpacket_type_undefined
-                &gt;&gt;= \critical=(critbit_set x0)</code></pre>
+                &gt;&gt;= \critical = (critbit_set x0)</code></pre>
 <p>A subpacket is &quot;critical&quot; if bit 7 is set:</p>
 <pre><code>let \critbit_set x = (64&amp;x) == 64</code></pre>
 <p>Several types of subpacket, each with its own syntax, are defined:</p>
@@ -473,7 +553,7 @@ sp_notation_data ::= sp_notation_flags
                KF_AUTHENTICATION         = 0x20,
                KF_PRIVATE_IS_MULTIHOLDER = 0x80}
 sp_key_flags ::= (map binary_or (poset kf_defined)) bytes[subpacketlen-1]
-
+             &gt;&gt;= \key_flags=(flag_split kf_defined x0)
 # 0x10, 0x80 self-sig only for 0x1f 0x18 sig types</code></pre>
 <p><em>Subtype 28:</em> Signer's user id (5.2.3.22):</p>
 <pre><code>sp_signers_userid ::= userid</code></pre>
@@ -496,7 +576,7 @@ sp_reason_for_revocation ::= rr_code utf8_text[subpacketlen-1]</code></pre>
             &gt;&gt;= \use_mdc = x0 == 0x01
 sp_features ::= feat_mdc bytes[subpacketlen-1]</code></pre>
 <p><em>Subtype 31:</em> Signature target (5.2.3.25):</p>
-<pre><code>target_hash_algo ::= algo_hash
+<pre><code>target_hash_algo ::= hash_algo
                  &gt;&gt;= \=targethashlen = hashlen
 sp_signature_target ::= algo_pubkey
                         target_hash_algo
@@ -532,8 +612,19 @@ sig_body_v4        ::= 0x04
 <pre><code>sig_body           ::= sig_body_v3 || sig_body_v4</code></pre>
 <h2 id="tag-3-symmetrically-encrypted-session-key">Tag 3: Symmetrically encrypted session key</h2>
 <p>RFC 4880 s. 5.3:</p>
+<p>A SKESK packet may either contain an encrypted session key, or specify that an S2K algorithm should be used to derive the encrypted session key.</p>
+<p>These two uses are distinguished only by whether the packet contains more bytes than necessary for the S2K specifier.</p>
+<p>Both cases:</p>
 <pre><code>skesk_esk   ::= bytes[length - 3]
-skesk_body  ::= 0x04 symm_algo s2k_spec skesk_esk</code></pre>
+skesk_body  ::= 0x04
+                symm_algo
+                s2k_spec
+                skesk_esk?</code></pre>
+<p>The encrypted payload, if present:</p>
+<pre><code>skesk_payload ::= symm_algo
+                  symm_key[payloadlen-1]</code></pre>
+<h3 id="test-cases-unsafe-usages">Test cases: unsafe usages</h3>
+<p>30304000009</p>
 <p>QQQQ: RFC 6337 limitations?</p>
 <h2 id="tag-4-one-pass-signature-tag-4">Tag 4: One-pass signature (tag 4)</h2>
 <p>A useful new packet type introduced in version 4.</p>
@@ -555,9 +646,12 @@ onepass_sig_body ::= 0x03
 <pre><code>secretkey_body    ::= pubkey secretkey</code></pre>
 <p><em>Tag 7. Secret-subkey:</em></p>
 <pre><code>secretsubkey_body ::= pubkey secretkey</code></pre>
-<h3 id="definitions-common-to-public-and-secret-keys">Definitions common to public and secret keys</h3>
-<h4 id="algorithm-specific-fields-1">Algorithm-specific fields</h4>
-<h5 id="prime-based-crypto-2">Prime-based crypto</h5>
+<h3 id="algorithm-specific-fields-1">Algorithm-specific fields</h3>
+<pre><code>pubkey_asfs         ::= (  pubkey_asf_elg
+                         | pubkey_asf_dsa
+                         | pubkey_asf_rsa
+                         | pubkey_asf_ec  )</code></pre>
+<h4 id="prime-based-crypto-2">Prime-based crypto</h4>
 <pre><code>rsa_n, rsa_e          = mpi, mpi
 pubkey_asf_rsa_v3   ::= rsa_n rsa_e
 pubkey_asf_rsa      ::= &amp;(is_rsa pubkey_algo)
@@ -568,7 +662,15 @@ pubkey_asf_dsa      ::= &amp;pubkey_algo==DSA dsa_p:mpi dsa_q:mpi dsa_y:mpi
 pubkey_asf_elg      ::= &amp;pubkey_algo==ELG_E elg_p:mpi elg_q:mpi
 
 # TODOX942</code></pre>
-<h5 id="elliptic-curve-crypto-2">Elliptic-curve crypto</h5>
+<h4 id="elliptic-curve-crypto-2">Elliptic-curve crypto</h4>
+<p>RFC 6637 s. 6: TODO match constraint</p>
+<pre><code>ec_mpibitlen        ::=   0x02 0x03  // 515
+                        | 0x03 0x03  // 771
+                        | 0x04 0x23  // 1059
+                    &lt;&lt;= \bytelen = (x0 &lt;&lt; 8 + x1 + 7) / 8
+ec_pointmpi         ::= ec_mpibitlen 0x04 bytes[bytelen-1]
+                    &lt;&lt;= \x = (take x0, 0, ((bytelen-1)/2))
+                        \y = (take x0, ((bytelen-1)/2), bytelen)</code></pre>
 <p>RFC 6637 s. 9:</p>
 <pre><code>pubkey_asf_ecdsa    ::= &amp;pubkey_algo==ECDSA
                         curveoid
@@ -579,11 +681,6 @@ pubkey_asf_ecdh     ::= &amp;pubkey_algo==ECDH
                         0x03 0x01
                         ecdh_kdf_params
 pubkey_asf_ec       ::= pubkey_asf_ecdsa | pubkey_asf_ecdh</code></pre>
-<h4 id="pubkey_asfs">pubkey_asfs</h4>
-<pre><code>pubkey_asfs         ::= (  pubkey_asf_elg
-                         | pubkey_asf_dsa
-                         | pubkey_asf_rsa
-                         | pubkey_asf_ec  )</code></pre>
 <h3 id="public-key-version-3">Public key version 3</h3>
 <p>RFC 4880 s. 5.5.2:</p>
 <p>The key's expiration is embedded in the key packet for V3 keys:</p>
@@ -652,47 +749,90 @@ seckey_asf_elg ::= &amp;pubkey_algo==ELG_E
 seckey_asf_ec  ::= &amp;(is_ec pubkey_algo)
                    ec_privat_scalar:mpi</code></pre>
 <h4 id="secret-keys-1">Secret keys</h4>
-<p>TODO: parameterize length of enckey by enclosur and overhead</p>
-<pre><code>seckey_enckey  ::= &amp;enc bytes*
-seckey_asfs    ::= seckey_asf_rsa | seckey_asf_dsa | seckey_asf_elg
+<p>TODO: parameterize length of enckey by enclosure and overhead</p>
+<pre><code>seckey_enckey      ::= &amp;enc bytes*
+seckey_asfs        ::=   seckey_asf_rsa
+                       | seckey_asf_dsa
+                       | seckey_asf_elg
+                       | seckey_asf_ec
 seckey_unencrypted ::= seckey_asfs (s2k_cksum | s2k_hash)
-seckey         ::= s2k_convention  (seckey_enckey | seckey_unencrypted)</code></pre>
-<h1 id="tag-8-compressed-data">Tag 8: Compressed data</h1>
-<pre><code># RFC 4880 s. 5.6
-compressed_data ::= bytes[length-1]
-compressed_body ::= comp_algo compressed_data</code></pre>
-<h1 id="tag-9-symmetrically-encrypted-data-packet">Tag 9: Symmetrically encrypted data packet</h1>
+seckey             ::= s2k_convention
+                       (seckey_enckey | seckey_unencrypted)</code></pre>
+<h2 id="tag-8-compressed-data">Tag 8: Compressed data</h2>
+<p>4880 s 5.6</p>
+<p>Compressed data packets, 4880.5.6, are formed as</p>
+<pre><code>compressed_body ::=   comp_algo=0x00 data_uncomp
+                    | comp_algo=0x01 data_deflate
+                    | comp_algo=0x02 data_zlib
+                    | comp_algo=0x03 data_bzip2</code></pre>
+<p>The packet composition rules constrain the minimum length of the compressed data:</p>
+<pre><code>data_uncomp  ::= &amp;(length&gt;=8) bytes[length-1]
+data_deflate ::= &amp;(length&gt;=7) bytes[length-1]
+data_bzip2   ::= &amp;(length&gt;=45) &quot;BZ&quot; bytes[length-3]
+data_zlib    ::= &amp;(length&gt;=13) zlib_byte1 bytes[length-2]</code></pre>
+<p>A zlib stream always begins with a byte in:</p>
+<pre><code>zlib_byte1   ::= 0x8|0x18|0x28|0x38|0x48|0x58|0x68|0x78</code></pre>
+<p>Define the payload, after decompression, as:</p>
+<pre><code>compressed_payload ::= (decompress comp_algo compressed_data)</code></pre>
+<h2 id="note-lifting-payload-constraints-to-the-syntactic-level">Note: Lifting payload constraints to the syntactic level</h2>
+<h2 id="proven-lower-bounds">Proven lower bounds</h2>
+<p>Note first that the contents of a tag 8 packet must be a valid OpenPGP message.</p>
+<p><em>Uncompressed case.</em> The only OpenPGP message production that does not produce another OpenPGP message obligation is the literal data production. Since all OpenPGP messages have length &gt; 0, a single literal packet is the shortest possible production.</p>
+<p>The shortest valid literal packet productions are 8 bytes:</p>
+<pre><code>literal_packet &amp;length=8 == 0xcb|0xac 6 literal_format 0 timestamp
+literal_packet &amp;length&lt;8 == \emptyset</code></pre>
+<p>We lift the length constraint first; note that the shortest valid <em>compressed</em> payload is an old-type Tag 11 length-type one packet, e.g.:</p>
+<pre><code>0xcb|0xac 6 &#39;l&#39; 0  0 0 0 0</code></pre>
+<p>Thus,</p>
+<pre><code>minlen_uncompressed = 8</code></pre>
+<p>The best compression given by &quot;zopfli&quot; for the deflate and zlib cases:</p>
+<pre><code>minlen_mlb_deflate = 7
+minlen_mlb_zlib = 13</code></pre>
+<p>TODO(dlg): Should be verified by exhaustion in the forward dir. Easy enough with known sup: 256 ** 6 == 2 ** 48 cases. (May, alternatively, be possible to prove this is the UB for 6 bytes is 7 bytes...don't think this is true, however.)</p>
+<p>The best compression given by &quot;bzip2&quot; on the test packet:</p>
+<pre><code>minlen_mlb_bz2 = 45</code></pre>
+<p>(This encodes the data as a BZ2 literal packet. TODO: prove this is best bz2 can do due to format.)</p>
+<p>The &quot;uncompressed&quot; compression algorithm:</p>
+<pre><code>compressed_0 ::= &amp;comp_algo=UNCOMPESSED=0 openpgp_message</code></pre>
+<p>// TODO validity constraints: minimum length of each // compressed packet // Shortest case valid according to composition rules:</p>
+<p>// Internal data is old-type literal, single octet length // can find shortest compression by exhaustion</p>
+<h2 id="tag-9-symmetrically-encrypted-data-packet">Tag 9: Symmetrically encrypted data packet</h2>
 <pre><code> # RFC 4880 s. 5.7
  sedp_body       ::= bytes[length]</code></pre>
-<h1 id="tag-10-marker">Tag 10: Marker</h1>
+<h2 id="tag-10-marker">Tag 10: Marker</h2>
 <pre><code> # RFC 4880 s. 5.8
  marker_body     ::= &quot;PGP&quot;</code></pre>
-<h1 id="tag-11-literal">Tag 11: Literal</h1>
-<pre><code># RFC 4880 s. 5.9
+<h2 id="tag-11-literal">Tag 11: Literal</h2>
+<p>The format of a literal packet:</p>
+<pre><code>literal_body        ::= format
+                        filenamelen filename
+                        creation_date
+                        data
+
+
+# RFC 4880 s. 5.9
 LITERAL_LOCAL = &#39;l&#39; | &#39;1&#39;
 # The compatibility predicate for &#39;local&#39; format
 let \islocal x = x \in {&#39;l&#39;, &#39;1&#39;}
-literal_format      ::= (  LITERAL_BINARY=&#39;b&#39;
-                         | LITERAL_TEXT=&#39;t&#39;
-                         | LITERAL_UTF8=&#39;u&#39;
-                         | literal_local )
-literal_filenamelen ::= len_old1
-literal_filename    ::= bytes[literal_filenamelen]
-                    &gt;&gt;= \literal_datalen = length-literal_filenamelen-6
-literal_date        ::= timestamp
-literal_data        ::= (  &amp;literal_format=&#39;b&#39;       bytes[literal_datalen]
-                         | &amp;literal_format=&#39;t&#39;       latin1_text[literal_datalen]
-                         | &amp;literal_format=&#39;u&#39;       utf8_text[literal_datalen]
-                         | &amp;(islocal literal_format) local_text[literal_datalen])
-literal_body        ::= literal_format literal_filenamelen literal_filename
-                        literal_date literal_data</code></pre>
-<h1 id="tag-12-trust">Tag 12: Trust</h1>
+format      ::= (  LITERAL_BINARY=&#39;b&#39;
+                 | LITERAL_TEXT=&#39;t&#39;
+                 | LITERAL_UTF8=&#39;u&#39;
+                 | literal_local )
+filenamelen ::= len_old1
+filename    ::= bytes[literal_filenamelen]
+            &gt;&gt;= \literal_datalen = length-literal_filenamelen-6
+date        ::= timestamp
+data        ::= (  &amp;format=&#39;b&#39;        bytes[literal_datalen]
+                 | &amp;format=&#39;t&#39;        latin1_text[literal_datalen]
+                 | &amp;format=&#39;u&#39;        utf8_text[literal_datalen]
+                 | &amp;(islocal format)  local_text[literal_datalen])</code></pre>
+<h2 id="tag-12-trust">Tag 12: Trust</h2>
 <pre><code># RFC 4880 s. 5.10
 trust_body          ::= bytes[length]</code></pre>
-<h1 id="tag-13-user-id-tag-13">Tag 13: User ID (tag 13)</h1>
+<h2 id="tag-13-user-id-tag-13">Tag 13: User ID (tag 13)</h2>
 <pre><code># RFC 4880 s. 5.11
 userid_body         ::= utf8_text[length]</code></pre>
-<h1 id="tag-17-user-attribute">Tag 17: User attribute</h1>
+<h2 id="tag-17-user-attribute">Tag 17: User attribute</h2>
 <pre><code># RFC 4880 s. 5.12
 USERATTRIB_SUBPACKET_IMAGE = 1
 USERATTRIB_SUBPACKET_EXPERIMENTAL = 100..110
@@ -716,11 +856,11 @@ userattrib_subpacket       ::= newlen userattrib_subpacket_type bytes[newlen]
                                \type = x1,
                                \subpacketlen = x0
 userattrib_body            ::= userattrib_subpacket* nil</code></pre>
-<h1 id="tag-18-symmetrically-encrypted-integrity-protected-data">Tag 18: Symmetrically encrypted integrity protected data</h1>
+<h2 id="tag-18-symmetrically-encrypted-integrity-protected-data">Tag 18: Symmetrically encrypted integrity protected data</h2>
 <pre><code># RFC 4880 s. 5.13
 seipd_encdata ::= bytes[length-1]
 seipd_body    ::= 1 seipd_encdata</code></pre>
-<h1 id="tag-19-modification-detection-code">Tag 19: Modification detection code</h1>
+<h2 id="tag-19-modification-detection-code">Tag 19: Modification detection code</h2>
 <pre><code># RFC 4880 s. 5.14
 mdc           ::= sha1_hash
 mdc_body      ::= mdc</code></pre>
@@ -784,9 +924,56 @@ cleartext_signature  ::= cleartext_header
                          dash_escaped_text
                          cleartext_sig</code></pre>
 <h1 id="packet-composition">Packet composition</h1>
-<p>TODO</p>
+<h2 id="messages">Messages</h2>
+<p>A valid OpenPGP message, 4880.11.3:</p>
+<pre><code>message :=   signed_message
+           | encrypted_message
+           | compressed_packet
+           | literal_packet
+
+
+encrypted_message := (pkesk_packet | skesk_packet)*
+                     (se_packet | seipd_packet)
+
+onepass_signed := onepass_signature_packet
+                  message
+                  signature_packet
+signed_message :=   signature_packet message
+                  | onepass_signed
+
+
+ // sedp, seidp, compressed must yield OpenPGP message
+ 11.3</code></pre>
+<h2 id="detached-signatures">Detached signatures</h2>
+<p>4880.11.4:</p>
+<pre><code>detached_signature := signature_packet &amp;//TODO sigtype constraint</code></pre>
+<h2 id="key-structures">Key structures</h2>
+<p>4880.12.1:</p>
+<pre><code>openpgp_v3_key := pubkey_packet &amp;(is_rsas pubkey_algo)
+                  revocation_self_sig?
+                  userid signature?
+                 (userid signature?)*
+
+
+openpgp_v4_key := pubkey_packet &amp;(&quot;certification&quot; \in pubkey_flags)
+                  revocation_self_sig?
+                  (signature_packet &amp;(sig_type==&quot;direct key&quot;))
+                  userid signature?
+                  (userid signature?)*
+                  (userattribute signature?)*
+                  openpgp_v4_subkey*
+
+openpgp_v4_subkey := subkey_packet
+                     binding_signature_revocation?
+                     binding_signature</code></pre>
 <h2 id="transferrable-key-packets">Transferrable key packets</h2>
 <h2 id="sign-then-encrypt">Sign-then-encrypt</h2>
 <h2 id="encrypt-then-sign">Encrypt-then-sign</h2>
 <h2 id="encrypt-only">Encrypt-only</h2>
 <h2 id="sign-only">Sign-only</h2>
+<section class="footnotes">
+<hr />
+<ol>
+<li id="fn1"><p>&quot;SHA-1 MUST NOT be used with the ECDSA or the KDF in the ECDH method.&quot; RFC 6637 s. 13. It would be absurd to read this as permitting MD5.<a href="#fnref1">↩</a></p></li>
+</ol>
+</section>

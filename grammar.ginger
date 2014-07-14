@@ -1,5 +1,5 @@
-OpenPGP syntax and semantic validity
-====================================
+OpenPGP syntax and semantic constraints
+======================================
 (incomplete draft)
 ------------------
 
@@ -33,6 +33,13 @@ Introduction
 
 A note: All references are to RFC 4880, unless otherwise specified.
 
+Two parts:
+
+   1. A packet-level semantics of OpenPGP packets and cryptographic validity.
+   2. A byte-level syntactic validity semantics.
+
+The direction of refinement is unusual; everything else is not.
+
 Common definitions
 ===================
 
@@ -58,7 +65,9 @@ XPEG-like grammar; symbols, with fixity patterns:
     _/_   : set (or production) symmetric difference
     >>=_  : semantic reduction of a production
     _::=_ : a production
-    _=_   : a named byte
+    _=_   : a named byte (equivalent to a token)
+    T(_)  : type "coercion"
+    _:_   : instantiation of a production with explicit naming
 
 
 Basic datatypes
@@ -77,8 +86,8 @@ Sequences of bytes:
 
     bytes[Nat] : Sequence{Nat}[Nat]
 
-Old-style lengths are just ubints; their length is implicitly selected
-by other syntactic elements.
+Old-style lengths are just ubints; their length is implicitly selected by other
+syntactic elements.
 
     len_old1 ::= byte
              >>= \length = x0
@@ -100,15 +109,38 @@ New-style lengths (4.2.2) implicitly encode their own length:
 New-style lengths with their first byte in 192..223 encode a *partial* body
 length (4.2.2.4),
 
-    let partial_length x = Nat(1 << (x&0x1f))
+    let partial_length x = Nat(1 << ( x & 0x1f))
 
-which, by definition, is in {2^n : n /in 0..30. Other semantic
-conditions apply:
+which, by definition, is in {2^n : n \in 0..30}. Other semantic
+conditions apply to partial body lengths:
 
      packet_body <<= nil
      len_new_partial ::= 224..254 bytes[length] len_new
                      >>= \length = partial_length(x0)
          packet_body <<= packet_body ++ x1
+
+Multiprecision integers
+-----------------------
+
+A multiprecision integer, generally:
+
+    any_mpi ::= bitlen:len_old2 bytes[bytelen]
+            >>= \bytelen = (bitlen + 7) / 8
+
+RFC 4880 requires MPIs to be in minimal form, which makes the map a bijection.
+Doing this casewise, where <<< is the usual rotary left shift operator:
+
+    zero_mpi ::= 0x0
+             >>= \= 0
+             >>= \bytelen = 0
+    nonzero_mpi ::= h:byte l:byte o:byte bytes[bytelen-1]
+                    &(o & (0x80 >> topbit)) != 0
+                >>= \topbit = 0x80 <<< (8 - (l % 8))
+                >>= \bytelen = (bitlen + 7) / 8
+
+    valid_mpi ::= zero_mpi | nonzero_mpi
+
+(This is not ambiguous because choice is ordered.)
 
 Other common types
 ------------------
@@ -139,15 +171,45 @@ RFC 6637 s. 11:
 
 ### Algorithm limitations
 
-RFC 6637 s. 11-13: SHA2 is the only permitted hash algorithm for the
-ECDH KDF, and for ECDSA hashes-to-sign:
+SHA2 is the only permitted hash algorithm for ECDSA hashes-to-sign:[^sha2note]
 
-    ec_hash_algo  ::= hash_algo_sha2
+    ecdsa_hash_algo     ::= hash_algo_sha2
 
-For ECDH:
+SHA2-256 or stronger is required for use with the ECDH KDF:
+
+    ecdh_kdf_hash_algo  ::= hash_algo_sha2_128b
+
+For the 192-bit profile described in RFC 6637 s. 12.2.1:
+
+    ec_hash_algo_192 ::= SHA2_384 | SHA2_512
+
+For the 128-bit profile described in RFC 6637 s. 12.2.2:
+
+    ec_hash_algo_128 ::= SHA2_256 | SHA2_384 | SHA2_512
+
+Suite B's profiles further restrict algorithms to:
+
+    ec_hash_algo_sb128 ::= SHA2_256
+    ec_symm_algo_sb128 ::= AES128
+    curve_oid_sb128    ::= curve_oid_p256
+
+    ec_hash_algo_sb192 ::= SHA2_384
+    ec_symm_algo_sb192 ::= AES256
+    curve_oid_sb192    ::= curve_oid_p384
+
+Only violation of the RFC 6337 requirements is considered a semantic constraint
+violation.  "This document is primarily concerned with format specification"
+rather than "interoperability concerns arising from fewer allowed algorithms" in
+Suite B. (6637.12.2)
+
+For Elliptic-Curve Diffie-Hellman (ECDH):
 
     ecdh_kek_algo   ::= symm_algo_aes
-    ecdh_kdf_params ::= ecdh_kdf_algo:ec_hash_algo ecdh_kek_algo
+    ecdh_kdf_params ::= ecdh_kdf_hash_algo
+                        ecdh_kek_algo
+
+[^sha2note]: "SHA-1 MUST NOT be used with the ECDSA or the KDF in the ECDH
+method." RFC 6637 s. 13. It would be absurd to read this as permitting MD5.
 
 
 # Packet tags
@@ -156,15 +218,17 @@ RFC 4880 s. 4.2.0.
 
 ## PTag bit-level diagram
 
+Using the big-endian bit-convention, where 0b10 == 2:
+
           ================= old-format
-          1 0=========================
-          | | ------------- packet tag
-          | | | | | | ----- length type
+          1 0 ========================
+          | | ------------- packet tag   (4 bit)
+          | | | | | | ----- length type  (2 bit)
          +---------------+
     PTag |7 6 5 4 3 2 1 0|
          +---------------+
           | | | | | | | |
-          | | ------------- packet tag
+          | | ------------- packet tag   (6 bit)
           1 1 ========================
           ================= new-format
 
@@ -224,7 +288,7 @@ RFC 4880 s. 9.1.
 
 #### Other prime-based crypto
 
-TODO(dlg): PS use of X9.42 DH?
+TODO(dlg): PS use of X9.42 DH? Found ref in PGP6 usability paper!
 
     algo_elg_es        ::= ELG_ES=20
     algo_elg_enc       ::= ELG_E=16
@@ -238,9 +302,9 @@ TODO(dlg): PS use of X9.42 DH?
 
 #### Prime-based crypto status predicate
 
-The status of prime-based-crypto algorithms, according to RFC4880:
+The status of prime-based-crypto algorithms:
 
-    let \algo_status x = CASE DH_X942 THEN "reserved"
+    let \algo_status x = CASE DH_X942 THEN "reserved for"
                          CASE ELG_ES  THEN "formerly"
                          CASE RSA_ES  THEN "deprecated"
 
@@ -265,30 +329,30 @@ The EC algorithms defined by RFC 6637 s. 5:
 The symmetric-key encryption algorithms defined in RFC 4880 s. 9.1,
 extended by RFC 5581.
 
-    algo_symm           ::= algo_symm_modern | algo_symm_old | algo_symm_other
+    symm_algo           ::= symm_algo_modern | symm_algo_old | symm_algo_other
 
-The "plaintext" algorithm, also known as (\rot13)^2:
+The "plaintext" algorithm, also known as (rot13)^-2:
 
-    algo_symm_plaintext ::= PLAINTEXT=0
+    symm_algo_plaintext ::= PLAINTEXT=0
 
 AES has to be broken out from other algorithms to support RFC 6637's
-constraints on KEK algorithm:
+constraints on ECDH KEK algorithm:
 
     # Algorithms with < 128-bit security strength
-    algo_symm_old       ::= IDEA=1 | TDES=2 | CAST5=3 | BLOWFISH=4
+    symm_algo_old       ::= IDEA=1 | TDES=2 | CAST5=3 | BLOWFISH=4
     # Advanced Encryption Standard
-    algo_symm_aes       ::= AES128=7 | AES192=8 | AES256=9
+    symm_algo_aes       ::= AES128=7 | AES192=8 | AES256=9
 
 RFC 5581's extension to add Camellia:
 
-    algo_symm_camellia  ::= CAMELLIA128=11 | CAMELLIA192=12 | CAMELLIA256=13
+    symm_algo_camellia  ::= CAMELLIA128=11 | CAMELLIA192=12 | CAMELLIA256=13
 
 We also define a set of modern(-ish) crypto algorithms:
 
     # Algorithms with >= 128-bit security strength, no weak keys
-    algo_symm_modern    ::= (  algo_symm_aes
+    symm_algo_modern    ::= (  symm_algo_aes
                              | TWOFISH=10
-                             | algo_symm_camellia )
+                             | symm_algo_camellia )
 
 ### Unspecified symmetric crypto algorithms
 
@@ -298,36 +362,36 @@ numbers:
     SYMM_RESERVED       ::= 5..6
     SYMM_PRIVATE        ::= 100..109
     SYMM_UNDEFINED      ::= 14..99 | 111..255
-    algo_symm_other     ::= SYMM_RESERVED | SYMM_PRIVATE | SYMM_UNDEFINED
+    symm_algo_other     ::= SYMM_RESERVED | SYMM_PRIVATE | SYMM_UNDEFINED
 
- 
 ## Hash algorithms
 
-    algo_hash          ::=  algo_hash_old
-                          | algo_hash_sha1
-                          | algo_hash_sha2
-                          | algo_hash_other
+    hash_algo          ::=  hash_algo_old
+                          | hash_algo_sha1
+                          | hash_algo_sha2
+                          | hash_algo_other
 
 ### Hash algorithms, oldest
 
-    algo_hash_old      ::= MD5=1 | RIPEMD160=3
-    algo_hash_sha1     ::= SHA1=2
+    hash_algo_old      ::= MD5=1 | RIPEMD160=3
+    hash_algo_sha1     ::= SHA1=2
 
 
 ### Hash algorithms, SHA-2
 
-SHA2-512/384 is broken out separately; its use is required for the RFC 6637
-s. 12.2.1 profile.
+SHA2-512/384, SHA2-256, and SHA2-224 are broken out separately; the two profiles
+of RFC 6637 s. 12.2 enforce additional constraints for EC-based OpenPGP.
 
-    algo_hash_sha2_512 ::= SHA2_384=9 | SHA2_512=10
-    algo_hash_sha2     ::= SHA2_224=11 | SHA2_256=8 | algo_hash_sha2_512
+    hash_algo_sha2_192b ::= SHA2_384=9  | SHA2_512=10
+    hash_algo_sha2_128b ::= SHA2_256=8  | hash_algo_sha2_192b
+    hash_algo_sha2      ::= SHA2_224=11 | hash_algo_sha2_512
 
 ### Unspecified hash algorithms
 
     HASH_RESERVED      ::= 4..7
     HASH_PRIVATE       ::= 100..110
     HASH_UNDEFINED     ::= 111..255
-    algo_hash_other    ::= HASH_RESERVED | HASH_PRIVATE | HASH_UNDEFINED
+    hash_algo_other    ::= HASH_RESERVED | HASH_PRIVATE | HASH_UNDEFINED
 
 
 ## String-to-key (S2K) specifiers
@@ -336,11 +400,13 @@ String-to-key (S2K) specifiers are used to combine a "password" and,
 optionally, salt into a symmetric encryption key. The specifier format
 is defined by RFC 4880 s. 3.7.1.
 
+    s2k_rfc4880       ::= s2k_simple | s2k_salted | s2k_iterated | s2k_error
+
 ### Common definitions
 
 If salt is used, it is always 8 bytes long:
 
-   s2k_salt          ::= bytes[8]
+    s2k_salt          ::= bytes[saltlen=8]
 
 ### S2K specifier types
 
@@ -374,10 +440,9 @@ Iterated and salted S2K specifiers are defined by RFC 4480 s. 3.7.1.3.
 A helper function to decode the encoded bytecount of hashed material,
 
     \decode_s2k_c : Nat -> (Nat -> Nat)
-    let \decode_s2k_c c =
-      let \bytecount passlen =
-        max(passlen + saltlen=8,
-            (16 + (c&15)) << ((c>>4) + 6))
+    let \decode_s2k_c c = let \bytecount passlen =
+                                max(passlen + saltlen=8,
+                                    (16 + (c&15)) << ((c>>4) + 6))
 
 and the specifier definition:
 
@@ -394,8 +459,6 @@ the I&S S2K specifiers are used:
     # RFC 6637 s. 13
     s2k_ec           ::= s2k_iterated
 
-Since SHA1 only provides 160-bits of output, it is impossible to achieve
-the 192-bit security strength required by RFC 6637 s. 12.2.1 using it:
 
     # RFC 6637 s. 12.2.1
     s2k_ec_192b       ::= S2K_ITERATED=0x03
@@ -406,20 +469,74 @@ the 192-bit security strength required by RFC 6637 s. 12.2.1 using it:
 RFC 6637 apparently does not forbid the use of SHA1 as the S2K hash function;
 but it dosn't state that it may be used, either. QQQQ: sha2 acceptable?
 
+# Packet bodies, implicit
 
-### S2K specifiers, generally
+## CKDF-AA1
 
-    s2k_rfc4880       ::= s2k_simple | s2k_salted | s2k_iterated | s2k_error
+RFC 6637 s. 8:
+
+    kdf_params  ::= curve_oid
+                    18
+                    pubkey_ecdh_kdf_params
+                    "Anonymous Sender" 0x20 0x20 0x20 0x20
+                    encryption_key:sha1_hash
+
+The Concatenation KDF (Approved Alternative 1), RFC 6637 s. 7:
+
+    let \kdf_ckdfaa1_in shared = 0x0 0x0 0x0 0x1
+                                 (getx shared)
+                                 kdf_params
+
+## Key IDs and fingerprints
+
+RFC 4880 s. 12.2.
+
+Version 3 fingerprints are simple:
+
+    hashed_material_v3 ::= rsa_n rsa_e
+    fingerprint_v3 ::= (md5 hashed_material_v3)
+
+Version 3 key ids are formed by truncation of the RSA modulus:
+
+    keyid_v3 ::= (truncate rsa_n 8)
+
+V4 fingerprints include irrelevant fields:
+
+    hashed_material_v4 ::= 0x99
+                           hashed_length:len_old2
+                           0x04
+                           timestamp
+                           pubkey_algo
+                           pubkey_asfs
+                       >>= \hashed_length = 1 + 4 + 1 + len(pubkey_asfs)
+    fingerprint_v4 ::= (sha1 hashed_material_v4)
+
+As partial compensation, V4 keyids are less malleable (though drawn from
+the weaker end of the SHA1 fingeprint):
+
+    keyid_v4 ::= (truncate fingerprint_v4 8)
+
+## MDC
+
+    mdc_hashed_material ::= prefix:bytes[16]
+                            prefix2 &(prefix2 == prefix[0:2])
+                            0xd3
+                            20
+                            sha1_hash
 
 
+## S2K hashed material
 
-# Packet bodies
+    s2k_contexts ::=   (cipher_keylen / hash_blocklen)
+                     + (1 IF cipher_keylen%hash_blocklen != 0 ELSE 0)
+
+# Packet bodies on the wire
 
 ## Tag 1: Public-key encrypted session key
 
 RFC 4880 s. 5.1:
 
-### Prime based crypto
+### Prime-based crypto
 
     # RSA-E/RSA-ES
     pkesk_rsa_asf         ::= algo_rsa_enc rsa_memodn:mpi
@@ -428,7 +545,7 @@ RFC 4880 s. 5.1:
     # X942DH
     # TODO
 
-### Elliptic curve crypto
+### Elliptic-curve crypto
 
 RFC 6637 s. 8:
 
@@ -444,7 +561,7 @@ RFC 6637 s. 8:
 
 ## Tag 2: Signature (tag 2)
 
-RFC 4880 s. 5.2.1
+RFC 4880 s. 5.2.1.
 
 ### Common definitions
 
@@ -484,6 +601,8 @@ RFC 4880 defines a limited number of signature types:
                             | 0x29 | 0x31..0x39 | 0x41..0x49 | 0x51..0xff)
 
 QQQQ: Should an unknown signature type produce an error here?
+
+TODO: Substantial semantic constraints on valid packet compositions.
 
 ### Algorithm specific fields
 
@@ -536,7 +655,7 @@ RFC 4880 s. 5.2.3.1:
                        | subpacket_type_reserved
                        | subpacket_type_specified
                        | subpacket_type_undefined
-                    >>= \critical=(critbit_set x0)
+                    >>= \critical = (critbit_set x0)
 
 A subpacket is "critical" if bit 7 is set:
 
@@ -676,7 +795,7 @@ Several types of subpacket, each with its own syntax, are defined:
                    KF_AUTHENTICATION         = 0x20,
                    KF_PRIVATE_IS_MULTIHOLDER = 0x80}
     sp_key_flags ::= (map binary_or (poset kf_defined)) bytes[subpacketlen-1]
-
+                 >>= \key_flags=(flag_split kf_defined x0)
     # 0x10, 0x80 self-sig only for 0x1f 0x18 sig types
 
 *Subtype 28:* Signer's user id (5.2.3.22):
@@ -708,7 +827,7 @@ A few machine-readable revocation-reason codes are defined:
 
 *Subtype 31:* Signature target (5.2.3.25):
 
-    target_hash_algo ::= algo_hash
+    target_hash_algo ::= hash_algo
                      >>= \=targethashlen = hashlen
     sp_signature_target ::= algo_pubkey
                             target_hash_algo
@@ -759,8 +878,32 @@ The version 4 signature packet format (5.2.3):
 
 RFC 4880 s. 5.3:
 
+A SKESK packet may either contain an encrypted session key,
+or specify that an S2K algorithm should be used to derive
+the encrypted session key.
+
+These two uses are distinguished only by whether the packet
+contains more bytes than necessary for the S2K specifier.
+
+Both cases:
+
     skesk_esk   ::= bytes[length - 3]
-    skesk_body  ::= 0x04 symm_algo s2k_spec skesk_esk
+    skesk_body  ::= 0x04
+                    symm_algo
+                    s2k_spec
+                    skesk_esk?
+
+The encrypted payload, if present:
+
+    skesk_payload ::= symm_algo
+                      symm_key[payloadlen-1]
+
+
+
+### Test cases: unsafe usages
+
+
+\xc3\x03\x04\x00\x00\x09
 
 QQQQ: RFC 6337 limitations?
 
@@ -800,11 +943,14 @@ A useful new packet type introduced in version 4.
     secretsubkey_body ::= pubkey secretkey
 
 
-### Definitions common to public and secret keys
+### Algorithm-specific fields
 
-#### Algorithm-specific fields
+    pubkey_asfs         ::= (  pubkey_asf_elg
+                             | pubkey_asf_dsa
+                             | pubkey_asf_rsa
+                             | pubkey_asf_ec  )
 
-##### Prime-based crypto
+#### Prime-based crypto
 
     rsa_n, rsa_e          = mpi, mpi
     pubkey_asf_rsa_v3   ::= rsa_n rsa_e
@@ -818,7 +964,17 @@ A useful new packet type introduced in version 4.
     # TODOX942
 
 
-##### Elliptic-curve crypto
+#### Elliptic-curve crypto
+
+RFC 6637 s. 6: TODO match constraint
+
+    ec_mpibitlen        ::=   0x02 0x03  // 515
+                            | 0x03 0x03  // 771
+                            | 0x04 0x23  // 1059
+                        <<= \bytelen = (x0 << 8 + x1 + 7) / 8
+    ec_pointmpi         ::= ec_mpibitlen 0x04 bytes[bytelen-1]
+                        <<= \x = (take x0, 0, ((bytelen-1)/2))
+                            \y = (take x0, ((bytelen-1)/2), bytelen)
 
 RFC 6637 s. 9:
 
@@ -832,12 +988,6 @@ RFC 6637 s. 9:
                             ecdh_kdf_params
     pubkey_asf_ec       ::= pubkey_asf_ecdsa | pubkey_asf_ecdh
 
-#### pubkey_asfs
-
-    pubkey_asfs         ::= (  pubkey_asf_elg
-                             | pubkey_asf_dsa
-                             | pubkey_asf_rsa
-                             | pubkey_asf_ec  )
 
 ### Public key version 3
 
@@ -934,68 +1084,158 @@ hash-algorithm limitation apply for the RFCs?
 
 #### Secret keys
 
-TODO: parameterize length of enckey by enclosur and overhead
+TODO: parameterize length of enckey by enclosure and overhead
 
-    seckey_enckey  ::= &enc bytes*
-    seckey_asfs    ::= seckey_asf_rsa | seckey_asf_dsa | seckey_asf_elg
+    seckey_enckey      ::= &enc bytes*
+    seckey_asfs        ::=   seckey_asf_rsa
+                           | seckey_asf_dsa
+                           | seckey_asf_elg
+                           | seckey_asf_ec
     seckey_unencrypted ::= seckey_asfs (s2k_cksum | s2k_hash)
-    seckey         ::= s2k_convention  (seckey_enckey | seckey_unencrypted)
+    seckey             ::= s2k_convention
+                           (seckey_enckey | seckey_unencrypted)
 
 
-# Tag 8: Compressed data
+## Tag 8: Compressed data
 
-    # RFC 4880 s. 5.6
-    compressed_data ::= bytes[length-1]
-    compressed_body ::= comp_algo compressed_data
+4880 s 5.6
+
+Compressed data packets, 4880.5.6, are formed as
+
+    compressed_body ::=   comp_algo=0x00 data_uncomp
+                        | comp_algo=0x01 data_deflate
+                        | comp_algo=0x02 data_zlib
+                        | comp_algo=0x03 data_bzip2
+
+The packet composition rules constrain the minimum length of
+the compressed data:
+
+    data_uncomp  ::= &(length>=8) bytes[length-1]
+    data_deflate ::= &(length>=7) bytes[length-1]
+    data_bzip2   ::= &(length>=45) "BZ" bytes[length-3]
+    data_zlib    ::= &(length>=13) zlib_byte1 bytes[length-2]
+
+A zlib stream always begins with a byte in:
+
+    zlib_byte1   ::= 0x8|0x18|0x28|0x38|0x48|0x58|0x68|0x78
+
+Define the payload, after decompression, as:
+
+    compressed_payload ::= (decompress comp_algo compressed_data)
 
 
-# Tag 9: Symmetrically encrypted data packet
+## Note: Lifting payload constraints to the syntactic level
+
+## Proven lower bounds
+
+Note first that the contents of a tag 8 packet must be a valid
+OpenPGP message.
+
+*Uncompressed case.* The only OpenPGP message production that
+does not produce another OpenPGP message obligation is the literal
+data production. Since all OpenPGP messages have length > 0, a
+single literal packet is the shortest possible production.
+
+The shortest valid literal packet productions are 8 bytes:
+
+    literal_packet &length=8 == 0xcb|0xac 6 literal_format 0 timestamp
+    literal_packet &length<8 == \emptyset
+
+We lift the length constraint first; note that the shortest valid
+*compressed* payload is an old-type Tag 11 length-type one packet,
+e.g.:
+
+    0xcb|0xac 6 'l' 0  0 0 0 0
+
+Thus,
+
+    minlen_uncompressed = 8
+
+The best compression given by "zopfli" for the deflate and zlib
+cases:
+
+    minlen_mlb_deflate = 7
+    minlen_mlb_zlib = 13
+
+TODO(dlg): Should be verified by exhaustion in the forward dir.
+Easy enough with known sup: 256 ** 6 == 2 ** 48 cases. (May,
+alternatively, be possible to prove this is the UB for 6 bytes
+is 7 bytes...don't think this is true, however.)
+
+The best compression given by "bzip2" on the test packet:
+
+    minlen_mlb_bz2 = 45
+
+(This encodes the data as a BZ2 literal packet. TODO: prove
+this is best bz2 can do due to format.)
+
+The "uncompressed" compression algorithm:
+
+    compressed_0 ::= &comp_algo=UNCOMPESSED=0 openpgp_message
+
+
+// TODO validity constraints: minimum length of each
+// compressed packet
+// Shortest case valid according to composition rules:
+
+// Internal data is old-type literal, single octet length
+// can find shortest compression by exhaustion
+
+
+
+## Tag 9: Symmetrically encrypted data packet
 
      # RFC 4880 s. 5.7
      sedp_body       ::= bytes[length]
 
 
-# Tag 10: Marker
+## Tag 10: Marker
 
      # RFC 4880 s. 5.8
      marker_body     ::= "PGP"
 
 
-# Tag 11: Literal
+## Tag 11: Literal
+
+The format of a literal packet:
+
+    literal_body        ::= format
+                            filenamelen filename
+                            creation_date
+                            data
+
 
     # RFC 4880 s. 5.9
     LITERAL_LOCAL = 'l' | '1'
     # The compatibility predicate for 'local' format
     let \islocal x = x \in {'l', '1'}
-    literal_format      ::= (  LITERAL_BINARY='b'
-                             | LITERAL_TEXT='t'
-                             | LITERAL_UTF8='u'
-                             | literal_local )
-    literal_filenamelen ::= len_old1
-    literal_filename    ::= bytes[literal_filenamelen]
-                        >>= \literal_datalen = length-literal_filenamelen-6
-    literal_date        ::= timestamp
-    literal_data        ::= (  &literal_format='b'       bytes[literal_datalen]
-                             | &literal_format='t'       latin1_text[literal_datalen]
-                             | &literal_format='u'       utf8_text[literal_datalen]
-                             | &(islocal literal_format) local_text[literal_datalen])
-    literal_body        ::= literal_format literal_filenamelen literal_filename
-                            literal_date literal_data
+    format      ::= (  LITERAL_BINARY='b'
+                     | LITERAL_TEXT='t'
+                     | LITERAL_UTF8='u'
+                     | literal_local )
+    filenamelen ::= len_old1
+    filename    ::= bytes[literal_filenamelen]
+                >>= \literal_datalen = length-literal_filenamelen-6
+    date        ::= timestamp
+    data        ::= (  &format='b'        bytes[literal_datalen]
+                     | &format='t'        latin1_text[literal_datalen]
+                     | &format='u'        utf8_text[literal_datalen]
+                     | &(islocal format)  local_text[literal_datalen])
 
 
-# Tag 12: Trust
+## Tag 12: Trust
 
     # RFC 4880 s. 5.10
     trust_body          ::= bytes[length]
 
 
-# Tag 13: User ID (tag 13)
+## Tag 13: User ID (tag 13)
 
     # RFC 4880 s. 5.11
     userid_body         ::= utf8_text[length]
 
 
-# Tag 17: User attribute
+## Tag 17: User attribute
 
     # RFC 4880 s. 5.12
     USERATTRIB_SUBPACKET_IMAGE = 1
@@ -1027,14 +1267,14 @@ The only format supported by the standard is JFIF:
     userattrib_body            ::= userattrib_subpacket* nil
 
 
-# Tag 18: Symmetrically encrypted integrity protected data
+## Tag 18: Symmetrically encrypted integrity protected data
 
     # RFC 4880 s. 5.13
     seipd_encdata ::= bytes[length-1]
     seipd_body    ::= 1 seipd_encdata
 
 
-# Tag 19: Modification detection code
+## Tag 19: Modification detection code
 
     # RFC 4880 s. 5.14
     mdc           ::= sha1_hash
@@ -1122,7 +1362,57 @@ The cleartext signature format is then given by:
 
 # Packet composition
 
-TODO
+
+## Messages
+
+A valid OpenPGP message, 4880.11.3:
+
+    message :=   signed_message
+               | encrypted_message
+               | compressed_packet
+               | literal_packet
+
+
+    encrypted_message := (pkesk_packet | skesk_packet)*
+                         (se_packet | seipd_packet)
+
+    onepass_signed := onepass_signature_packet
+                      message
+                      signature_packet
+    signed_message :=   signature_packet message
+                      | onepass_signed
+
+
+     // sedp, seidp, compressed must yield OpenPGP message
+     11.3
+
+## Detached signatures
+
+4880.11.4:
+
+    detached_signature := signature_packet &//TODO sigtype constraint
+
+## Key structures
+
+4880.12.1:
+
+    openpgp_v3_key := pubkey_packet &(is_rsas pubkey_algo)
+                      revocation_self_sig?
+                      userid signature?
+                     (userid signature?)*
+
+
+    openpgp_v4_key := pubkey_packet &("certification" \in pubkey_flags)
+                      revocation_self_sig?
+                      (signature_packet &(sig_type=="direct key"))
+                      userid signature?
+                      (userid signature?)*
+                      (userattribute signature?)*
+                      openpgp_v4_subkey*
+
+    openpgp_v4_subkey := subkey_packet
+                         binding_signature_revocation?
+                         binding_signature
 
 ## Transferrable key packets
 
