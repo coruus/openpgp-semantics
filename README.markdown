@@ -1,7 +1,7 @@
-# OpenPGP RFC 4880 and 6637 XPEG grammar
+# OpenPGP RFC 4880 and 6637
 
 This is an initial (incomplete) attempt at a reasonably formal syntax and
-semantics of PGP packets (not including the cryptographic validity conditions).
+semantics of PGP packets.
 
 It is written vaguely in the style of TRX; see http://arxiv.org/abs/1105.2576
 for details.
