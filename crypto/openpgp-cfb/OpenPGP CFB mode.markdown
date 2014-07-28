@@ -72,7 +72,7 @@ Decryption for OCFB-NR mode may proceed in the standards-approved way,
 so long as bytes 17 and 18 of the ciphertext are not examined.
 
 It is also possible to decrypt OCFB-R ciphertexts for which bytes 17
-and 18 are invalid by doing:[^ip]
+and 18 are invalid by doing:
 
     fr = [0] * s
     fre = encrypt(fr)
@@ -85,31 +85,3 @@ and 18 are invalid by doing:[^ip]
 
 This technique is recommended.
 
-
-[^ip]: IBM has a [patent][ibmpatent] on using turbo codes ("Slepian-Wolf") codes
-to iteratively decode and decrypt compressed CFB-mode ciphertexts. Why it
-doesn't apply:
-
-  - This technique does not use a Slepian-Wolf code.
-  - This technique relies on exact knowledge of the plaintext.
-  - This technique does not have a finite error rate; its error rate is zero.
-  - This technique does not operate on compressed ciphertexts; unlike IBM's
-    method, it decrypts ciphertexts of length identical to the length of
-    the originally emitted ciphertext.
-
-Sinnett (now perhaps owned by Juniper?) has a [patent][sinnettpatent] on
-authenticating (and perhaps decrypting) fragmented packets
-iteratively. Why it doesn't apply:
-
-  - This technique operates on a complete message, not a
-    fragment of a message.
-
-Prior art would be nice, if anyone knows of any. (The priority date of the
-patents are 2009-11-02 and 2005-02-09, respectively.)
-
-[^fips]: Only a NVLAP CST lab can determine whether a particular
-implementation is FIPS-compliant; only NIST can authorize a particular
-mode of operation for use in FIPS-compliant modules.
-
-[ibmpatent]: https://www.google.com/patents/US20110103580 "Compressing encrypted data without the encryption key"
-[sinnettpatent]: https://www.google.com/patents/US20070255947 "Methods and systems for incremental crypto processing of fragmented packets"
